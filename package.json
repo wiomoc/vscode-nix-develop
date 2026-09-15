@@ -1,0 +1,221 @@
+{
+  "name": "nix-develop",
+  "displayName": "Nix Develop",
+  "description": "Select a devShell from your flake.nix and reopen the workspace inside it, with the editor running in nix develop.",
+  "version": "0.6.3",
+  "publisher": "nix-develop",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/nix-develop-vscode-extension.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-org/nix-develop-vscode-extension/issues"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "nix",
+    "flake",
+    "devshell",
+    "nix develop",
+    "direnv"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "workspaceContains:flake.nix",
+    "workspaceContains:*/flake.nix",
+    "onResolveRemoteAuthority:nix-develop"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Evaluating a flake executes arbitrary Nix code and shell hooks from the workspace."
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "nixDevelop.selectDevShell",
+        "title": "Select devShell",
+        "category": "Nix Develop"
+      },
+      {
+        "command": "nixDevelop.showEnvironment",
+        "title": "Show resolved environment",
+        "category": "Nix Develop"
+      },
+      {
+        "command": "nixDevelop.showLog",
+        "title": "Show log",
+        "category": "Nix Develop"
+      },
+      {
+        "command": "nixDevelop.reopenInDevShell",
+        "title": "Reopen in devShell",
+        "category": "Nix Develop"
+      },
+      {
+        "command": "nixDevelop.reopenLocally",
+        "title": "Reopen folder locally",
+        "category": "Nix Develop"
+      },
+      {
+        "command": "nixDevelop.remoteExtensions",
+        "title": "Show devShell extensions (remote)",
+        "category": "Nix Develop"
+      },
+      {
+        "command": "nixDevelop.killServer",
+        "title": "Stop devShell server",
+        "category": "Nix Develop"
+      }
+    ],
+    "configuration": {
+      "title": "Nix Develop",
+      "properties": {
+        "nixDevelop.flakeDirectory": {
+          "type": "string",
+          "default": ".",
+          "scope": "resource",
+          "markdownDescription": "Directory containing `flake.nix`, relative to the workspace folder."
+        },
+        "nixDevelop.promptWhenUnset": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Prompt to pick a devShell when a flake.nix is present but no devShell has been selected yet."
+        },
+        "nixDevelop.impure": {
+          "type": "boolean",
+          "default": false,
+          "scope": "resource",
+          "description": "Pass --impure to nix develop."
+        },
+        "nixDevelop.extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "description": "Additional arguments passed to nix develop."
+        },
+        "nixDevelop.nixPath": {
+          "type": "string",
+          "default": "nix",
+          "scope": "machine",
+          "description": "Path to the nix executable."
+        },
+        "nixDevelop.buildTimeoutSeconds": {
+          "type": "number",
+          "default": 1800,
+          "scope": "resource",
+          "description": "Abort the devShell build after this many seconds."
+        },
+        "nixDevelop.remote.extensions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "markdownDescription": "Extension IDs to install into this devShell remote server, e.g. rust-lang.rust-analyzer."
+        },
+        "nixDevelop.remote.extensionsFromFlake": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "Also read extension IDs from the devShell itself. A `vscodeExtensions` list attribute on `mkShell` becomes a space-separated environment variable, so the flake can declare its own editor extensions."
+        },
+        "nixDevelop.remote.settings": {
+          "type": "object",
+          "default": {},
+          "scope": "resource",
+          "additionalProperties": true,
+          "markdownDescription": "Editor settings to apply inside this devShell's window, e.g. `{ \"nix.serverPath\": \"/run/current-system/sw/bin/nil\" }`. They are written to the devShell server's machine settings, so they outrank your user settings there and apply to no other window. These win over anything the flake declares."
+        },
+        "nixDevelop.remote.settingsFromFlake": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "Also read editor settings from the devShell itself. A `vscodeSettings` attribute on `mkShell` -- `builtins.toJSON { \"nix.serverPath\" = \"${pkgs.nil}/bin/nil\"; }`, or one `key=value` per line -- lets the flake point the editor at the tools it provides."
+        },
+        "nixDevelop.remote.serverDownloadUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Where to fetch the editor's server. Leave empty to detect it: VSCodium and other rebuilds declare their own `serverDownloadUrlTemplate` in `product.json`, and Microsoft builds fall back to `update.code.visualstudio.com`. Set this only to override that. The placeholders `${commit}`, `${quality}`, `${version}`, `${os}`, `${arch}` and `${platform}` (`${os}-${arch}`) are substituted."
+        },
+        "nixDevelop.remote.connectTimeoutSeconds": {
+          "type": "number",
+          "default": 180,
+          "scope": "machine",
+          "description": "How long to wait for the devShell server to report a listening port."
+        },
+        "nixDevelop.remote.patchServerLd": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "markdownDescription": "Point the devShell server's bundled `node` at a glibc from nixpkgs, using `patchelf`. The server ships a `node` linked through `/lib64/ld-linux-*`, which NixOS does not have. Turn this off on a host that resolves that path on its own -- `programs.nix-ld` enabled, or not NixOS at all -- to leave the binary alone and build nothing from nixpkgs."
+        }
+      }
+    },
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "nixDevelop.selectDevShell",
+          "when": "nixDevelop.hasFlake || nixDevelop.inDevShell"
+        },
+        {
+          "command": "nixDevelop.showEnvironment",
+          "when": "nixDevelop.hasFlake || nixDevelop.inDevShell"
+        },
+        {
+          "command": "nixDevelop.reopenInDevShell",
+          "when": "nixDevelop.hasFlake && !nixDevelop.inDevShell"
+        },
+        {
+          "command": "nixDevelop.reopenLocally",
+          "when": "nixDevelop.inDevShell"
+        },
+        {
+          "command": "nixDevelop.remoteExtensions",
+          "when": "nixDevelop.inDevShell"
+        },
+        {
+          "command": "nixDevelop.killServer",
+          "when": "nixDevelop.hasFlake || nixDevelop.inDevShell"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.mjs --production",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "node test/build.mjs && node out/test.cjs",
+    "test:e2e": "node test/build.mjs && NIX_DEVELOP_E2E=1 node out/test.cjs",
+    "package": "vsce package --no-dependencies",
+    "test:server": "node test/build.mjs && NIX_DEVELOP_E2E=1 NIX_DEVELOP_COMMIT=$(code --version | sed -n 2p) node out/test.cjs"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  },
+  "enabledApiProposals": [
+    "resolvers"
+  ],
+  "extensionKind": [
+    "ui"
+  ]
+}

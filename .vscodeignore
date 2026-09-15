@@ -1,0 +1,17 @@
+.vscode/**
+src/**
+out/**
+node_modules/**
+*.vsix
+esbuild.mjs
+tsconfig.json
+flake.nix
+flake.lock
+.gitignore
+.direnv/**
+docs/**
+test/**
+docs/**
+.vscode-test/**
+package-lock.json
+dist/**/*.map
