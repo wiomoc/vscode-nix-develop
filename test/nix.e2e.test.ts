@@ -13,6 +13,7 @@ const cfg: NixDevelopConfig = {
   extraArgs: [],
   nixPath: "nix",
   buildTimeoutSeconds: 1800,
+  profile: "persistent",
   remote: {
     extensions: [],
     extensionsFromFlake: true,

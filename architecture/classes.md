@@ -99,7 +99,7 @@ classDiagram
     class DevelopOptions {
         <<interface>>
         +installable: string
-        +profile: string
+        +profile: string | undefined
         +command: string[]
     }
 

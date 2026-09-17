@@ -34,6 +34,7 @@ const cfg: NixDevelopConfig = {
   extraArgs: [],
   nixPath: "nix",
   buildTimeoutSeconds: 1800,
+  profile: "persistent",
   remote: {
     extensions: [],
     extensionsFromFlake: true,
@@ -346,7 +347,7 @@ export async function runNixCommands(): Promise<void> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "nd-profile-"));
   const profile = path.join(dir, "profiles", "abc", "devshell");
 
-  await test("entering a devShell always roots it in a profile", async () => {
+  await test("a profile makes the devShell a GC root", async () => {
     const { args } = await developCommand(cfg, {
       installable: "/w/proj#devShells.x86_64-linux.default",
       profile,
@@ -372,6 +373,23 @@ export async function runNixCommands(): Promise<void> {
     );
   });
 
+  await test("no profile means no --profile, and nothing written", async () => {
+    // `nixDevelop.profile: none`. The flag has to disappear entirely: `--profile` with an
+    // empty path is not the same request, it is an error.
+    const unrooted = path.join(dir, "never", "devshell");
+    const { args } = await developCommand(cfg, {
+      installable: "/w#dev",
+      profile: undefined,
+      command: ["bash", "-c", "true"],
+    });
+    eq(args, [...features, "develop", "/w#dev", "--command", "bash", "-c", "true"]);
+    eq(
+      await fs.stat(path.dirname(unrooted)).then(() => true).catch(() => false),
+      false,
+      "a mode that roots nothing must not create directories either",
+    );
+  });
+
   await test("extraArgs and impure reach nix develop, ahead of the inner command", async () => {
     const { args } = await developCommand(
       { ...cfg, impure: true, extraArgs: ["--offline", "-L"] },
@@ -391,81 +409,6 @@ export async function runNixCommands(): Promise<void> {
       "-c",
       "true",
     ]);
-  });
-
-  await fs.rm(dir, { recursive: true, force: true });
-}
-
-export async function runShellRestore(): Promise<void> {
-  const fs = await import("node:fs/promises");
-  const os = await import("node:os");
-  const pathMod = await import("node:path");
-  const cp = await import("node:child_process");
-  const { SERVER_WRAPPER } = await import("../src/remote/server");
-
-  console.log("\nsession shell restore");
-
-  const dir = await fs.mkdtemp(pathMod.join(os.tmpdir(), "nd-shell-"));
-  // Stand-ins for the two bash builds: `compgen` succeeds for the interactive one and
-  // fails for nixpkgs' readline-less build. Each lives in its own directory so PATH
-  // lookup can be steered.
-  const goodDir = pathMod.join(dir, "good");
-  const badDir = pathMod.join(dir, "bad");
-  await fs.mkdir(goodDir, { recursive: true });
-  await fs.mkdir(badDir, { recursive: true });
-  const good = pathMod.join(goodDir, "bash");
-  const bad = pathMod.join(badDir, "bash");
-  const hostShell = pathMod.join(dir, "host-bash");
-  const zsh = pathMod.join(dir, "zsh");
-  await fs.writeFile(good, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-  await fs.writeFile(bad, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
-  await fs.writeFile(hostShell, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-  await fs.writeFile(zsh, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
-
-  // The harness itself must keep working even when PATH is pointed at the fakes.
-  const realBash = cp.execSync("command -v bash", { encoding: "utf8" }).trim();
-
-  const resolve = (opts: { shell: string; host?: string; path: string }): string => {
-    const env: Record<string, string> = { SHELL: opts.shell, PATH: opts.path };
-    if (opts.host) env.NIX_DEVELOP_HOST_SHELL = opts.host;
-    const r = cp.spawnSync(
-      realBash,
-      ["-c", SERVER_WRAPPER, "x", "/bin/sh", "-c", 'printf %s "$SHELL"'],
-      { env, encoding: "utf8" },
-    );
-    return r.stdout ?? "";
-  };
-
-  await test("replaces a bash that cannot act as an interactive shell", () => {
-    eq(
-      resolve({ shell: bad, host: hostShell, path: badDir }),
-      hostShell,
-      "the readline-less bash must not be used for terminals",
-    );
-  });
-
-  await test("keeps a bash the devShell deliberately provides", () => {
-    eq(
-      resolve({ shell: good, host: hostShell, path: goodDir }),
-      good,
-      "a shellHook that sets SHELL must win over the host shell",
-    );
-  });
-
-  await test("never second-guesses a non-bash shell", () => {
-    eq(resolve({ shell: zsh, host: hostShell, path: goodDir }), zsh, "only bash is probed");
-  });
-
-  await test("falls back to a usable bash when no host shell is known", () => {
-    // `packages = [ pkgs.bashInteractive ]` with no shellHook lands here: there is no host
-    // shell to borrow, so a usable bash from PATH is taken. The exact path depends on the
-    // PATH the server is launched with, so what is asserted is the guarantee -- the shell
-    // that cannot act as an interactive shell is not the one left behind.
-    const chosen = resolve({ shell: bad, path: `${goodDir}:${process.env.PATH ?? ""}` });
-    ok(chosen !== bad, "an unusable bash must not survive as SHELL");
-    ok(chosen.length > 0, "some shell must be chosen");
-    const probe = cp.spawnSync(chosen, ["-c", "compgen -e >/dev/null"], { encoding: "utf8" });
-    eq(probe.status, 0, `the chosen shell ${chosen} must support programmable completion`);
   });
 
   await fs.rm(dir, { recursive: true, force: true });
@@ -585,11 +528,14 @@ export async function runNixExtensions(): Promise<void> {
 }
 
 /**
- * What happens to a lock and its profile when the server behind them is gone.
+ * What happens to a lock -- and to the devShell's GC root -- when the server behind them
+ * is gone.
  *
  * Servers now retire themselves once idle, so nothing local runs at the moment one exits.
  * The next window is what notices, and these cover that handover without needing a real
- * server: a hand-written lock and a hand-built profile are all the state involved.
+ * server: a hand-written lock and a hand-built profile are all the state involved. The
+ * profile is the project's, not the server's, so the point of most of these is that it is
+ * still there afterwards.
  */
 export async function runServerLifecycle(): Promise<void> {
   const fs = await import("node:fs/promises");
@@ -598,7 +544,7 @@ export async function runServerLifecycle(): Promise<void> {
   const net = await import("node:net");
   const { ServerManager } = await import("../src/remote/server");
 
-  console.log("\nserver lock and profile release");
+  console.log("\nserver lock release");
 
   const storage = await fs.mkdtemp(pathMod.join(os.tmpdir(), "nd-lifecycle-"));
   const manager = new ServerManager({ fsPath: storage } as never, cfg);
@@ -607,15 +553,14 @@ export async function runServerLifecycle(): Promise<void> {
   const lockPath = (key: string) =>
     pathMod.join(storage, "server", "instances", `${key}.json`);
 
-  /** The symlinks `nix develop --profile` leaves behind, plus a bystander. */
+  /** The symlinks `nix develop --profile` leaves behind, where the project keeps them. */
   const buildProfile = async (key: string): Promise<string> => {
-    const dir = pathMod.join(storage, "remote", "profiles", key);
+    const dir = pathMod.join(storage, "project", ".vscode", "nix-develop", key);
     await fs.mkdir(dir, { recursive: true });
     const profile = pathMod.join(dir, "devshell");
     await fs.symlink("/nix/store/aaaa-devshell", `${profile}-1-link`);
     await fs.symlink("/nix/store/bbbb-devshell", `${profile}-2-link`);
     await fs.symlink("devshell-2-link", profile);
-    await fs.writeFile(pathMod.join(dir, "unrelated"), "not Nix's");
     return profile;
   };
 
@@ -656,23 +601,22 @@ export async function runServerLifecycle(): Promise<void> {
   const exists = (p: string) =>
     fs.lstat(p).then(() => true).catch(() => false);
 
-  await test("a lock whose server has gone releases the lock and the profile", async () => {
+  await test("a lock whose server has gone releases the lock", async () => {
     const key = "gone";
     const profile = await buildProfile(key);
     await writeLock(key, await deadPort(), profile);
 
     eq(await manager.findRunning(key, commit), undefined, "a dead port is not attachable");
     eq(await exists(lockPath(key)), false, "the lock should be gone");
-    eq(await exists(profile), false, "the profile symlink should be gone");
-    eq(await exists(`${profile}-1-link`), false, "generation 1 should be gone");
-    eq(await exists(`${profile}-2-link`), false, "generation 2 should be gone");
   });
 
-  await test("releasing a profile touches only what Nix wrote", async () => {
-    ok(
-      await exists(pathMod.join(storage, "remote", "profiles", "gone", "unrelated")),
-      "a file that is not a profile generation should survive",
-    );
+  await test("a released lock leaves the devShell's GC root alone", async () => {
+    // The profile outlives every server that enters it: that is what makes reopening the
+    // folder after a `nix store gc` -- or offline -- cost nothing.
+    const profile = pathMod.join(storage, "project", ".vscode", "nix-develop", "gone", "devshell");
+    ok(await exists(profile), "the profile symlink should still be there");
+    ok(await exists(`${profile}-1-link`), "generation 1 should still be there");
+    ok(await exists(`${profile}-2-link`), "generation 2 should still be there");
   });
 
   await test("a live server from another commit keeps its lock and its profile", async () => {
@@ -698,6 +642,48 @@ export async function runServerLifecycle(): Promise<void> {
     await close();
   });
 
+  await test("a sweep drops every lock whose server is gone, and keeps the rest", async () => {
+    // Nothing runs inside the devShell when a server retires itself, so the extension is
+    // what clears up afterwards -- at activation, across every devShell at once. Its own
+    // storage, because a sweep is the one operation that reads *all* of them.
+    const swept = await fs.mkdtemp(pathMod.join(os.tmpdir(), "nd-sweep-"));
+    const sweeper = new ServerManager({ fsPath: swept } as never, cfg);
+    const lockIn = (key: string) => pathMod.join(swept, "server", "instances", `${key}.json`);
+    const write = async (key: string, port: number) => {
+      await fs.mkdir(pathMod.dirname(lockIn(key)), { recursive: true });
+      await fs.writeFile(
+        lockIn(key),
+        JSON.stringify({ port, connectionToken: "t", pid: 999_999, commit }),
+      );
+    };
+
+    await write("dead-1", await deadPort());
+    await write("dead-2", await deadPort());
+    const { port, close } = await listen();
+    await write("alive", port);
+    // Not a lock, and not the sweep's to touch.
+    await fs.writeFile(pathMod.join(swept, "server", "instances", "notes.txt"), "keep me");
+
+    eq(await sweeper.sweep(), 2, "both dead servers' locks should go");
+    eq(await exists(lockIn("dead-1")), false, "a stale lock should be gone");
+    ok(await exists(lockIn("alive")), "a lock whose port still answers must survive");
+    ok(
+      await exists(pathMod.join(swept, "server", "instances", "notes.txt")),
+      "only locks are the sweep's to remove",
+    );
+    eq(await sweeper.sweep(), 0, "sweeping twice is not an error");
+
+    await close();
+    await fs.rm(swept, { recursive: true, force: true });
+  });
+
+  await test("a sweep leaves the devShell GC roots alone", async () => {
+    // The profile belongs to the project, and no server's departure releases it.
+    const profile = pathMod.join(storage, "project", ".vscode", "nix-develop", "gone", "devshell");
+    await manager.sweep();
+    ok(await exists(profile), "the project's profile is not the sweep's to remove");
+  });
+
   await test("no lock at all is not an error", async () => {
     eq(await manager.findRunning("never-started", commit), undefined);
   });
@@ -705,114 +691,6 @@ export async function runServerLifecycle(): Promise<void> {
   await fs.rm(storage, { recursive: true, force: true });
 }
 
-/**
- * The half of `SERVER_WRAPPER` that runs after the server exits.
- *
- * This is the only cleanup that happens when a server retires itself in the background, so
- * it is worth driving through a real bash rather than trusting it by inspection.
- */
-export async function runServerRelease(): Promise<void> {
-  const fs = await import("node:fs/promises");
-  const os = await import("node:os");
-  const pathMod = await import("node:path");
-  const cp = await import("node:child_process");
-  const { SERVER_WRAPPER } = await import("../src/remote/server");
-
-  console.log("\nserver wrapper release");
-
-  const realBash = cp.execSync("command -v bash", { encoding: "utf8" }).trim();
-  const root = await fs.mkdtemp(pathMod.join(os.tmpdir(), "nd-release-"));
-  const token = "6f1c1d2e-token";
-
-  /** A lock and a profile as `start()` would have left them, in their own directory. */
-  const scene = async (name: string, lockToken = token) => {
-    const dir = pathMod.join(root, name);
-    await fs.mkdir(dir, { recursive: true });
-    const lock = pathMod.join(dir, "key.json");
-    const profile = pathMod.join(dir, "devshell");
-    // Pretty-printed, as `start()` writes it: the token match has to hold across newlines.
-    await fs.writeFile(lock, JSON.stringify({ port: 1, connectionToken: lockToken }, null, 2));
-    await fs.symlink("/nix/store/aaaa", `${profile}-1-link`);
-    await fs.symlink("/nix/store/bbbb", `${profile}-2-link`);
-    await fs.symlink("devshell-2-link", profile);
-    await fs.writeFile(pathMod.join(dir, "unrelated"), "not Nix's");
-    return { dir, lock, profile };
-  };
-
-  const gone = async (p: string) => !(await fs.lstat(p).then(() => true).catch(() => false));
-
-  /** Run the wrapper with the release environment set, around `command`. */
-  const wrap = (
-    s: { lock: string; profile: string },
-    command: string[],
-    signal?: NodeJS.Signals,
-  ) => {
-    const child = cp.spawn(realBash, ["-c", SERVER_WRAPPER, "nix-develop", ...command], {
-      env: {
-        ...process.env,
-        NIX_DEVELOP_LOCK: s.lock,
-        NIX_DEVELOP_PROFILE: s.profile,
-        NIX_DEVELOP_LOCK_TOKEN: token,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let out = "";
-    child.stdout.on("data", (d: Buffer) => (out += d.toString()));
-    return new Promise<string>((resolve) => {
-      if (signal) setTimeout(() => child.kill(signal), 400);
-      child.on("exit", () => resolve(out));
-    });
-  };
-
-  await test("releases the lock and every profile generation once the server exits", async () => {
-    const s = await scene("exits");
-    await wrap(s, ["true"]);
-    ok(await gone(s.lock), "the lock should be gone");
-    ok(await gone(s.profile), "the profile symlink should be gone");
-    ok(await gone(`${s.profile}-1-link`), "generation 1 should be gone");
-    ok(await gone(`${s.profile}-2-link`), "generation 2 should be gone");
-    ok(!(await gone(pathMod.join(s.dir, "unrelated"))), "only Nix's symlinks may be removed");
-  });
-
-  await test("a SIGTERM to the wrapper still runs the release", async () => {
-    // Without the TERM trap, bash dies on the signal and the EXIT trap never fires --
-    // which is exactly what `Stop devShell server` sends.
-    const s = await scene("signalled");
-    await wrap(s, ["sleep", "30"], "SIGTERM");
-    ok(await gone(s.lock), "a signalled wrapper must still release the lock");
-    ok(await gone(s.profile), "a signalled wrapper must still release the profile");
-  });
-
-  await test("a successor's lock and profile are left alone", async () => {
-    // The profile is shared by every server for this devShell. A server exiting while its
-    // replacement is already running must not pull the new one's GC root out from under it.
-    const s = await scene("successor", "a-different-server");
-    await wrap(s, ["true"]);
-    ok(!(await gone(s.lock)), "the successor's lock must survive");
-    ok(!(await gone(s.profile)), "the successor's profile must survive");
-    ok(!(await gone(`${s.profile}-1-link`)), "its generations must survive too");
-  });
-
-  await test("a lock that is already gone is not an error", async () => {
-    const s = await scene("nolock");
-    await fs.rm(s.lock);
-    await wrap(s, ["true"]);
-    ok(!(await gone(s.profile)), "with no lock to match against, nothing is released");
-  });
-
-  await test("the release environment never reaches the server", async () => {
-    // These would otherwise be inherited by every terminal, task and debugger in the window.
-    const s = await scene("leak");
-    const out = await wrap(s, [
-      "bash",
-      "-c",
-      'printf "[%s][%s][%s]" "${NIX_DEVELOP_LOCK-}" "${NIX_DEVELOP_PROFILE-}" "${NIX_DEVELOP_LOCK_TOKEN-}"',
-    ]);
-    eq(out, "[][][]", "the wrapper must unset its own variables before running the server");
-  });
-
-  await fs.rm(root, { recursive: true, force: true });
-}
 
 /**
  * Detecting which editor is running, and therefore which server matches it.

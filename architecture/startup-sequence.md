@@ -89,7 +89,6 @@ sequenceDiagram
     participant FS as globalStorage
     participant Extn as remote/extensions
     participant Set as remote/settings
-    participant Shell as bash (SERVER_WRAPPER)
     participant Server as code-server
 
     Code->>Res: resolve("nix-develop+…", { resolveAttempt })
@@ -115,8 +114,8 @@ sequenceDiagram
             Res-->>Code: ResolvedAuthority(127.0.0.1, port, token)
             Note over Code: done — no Nix, no build, no download
         else port dead
-            SM->>FS: release() — delete lock, unlink profile generations
-            Note right of SM: backstop for a server that died<br/>without its wrapper running
+            SM->>FS: release() — delete the lock (the profile is the project's, and stays)
+            Note right of SM: a lock naming a dead port —<br/>the server retired, or was killed
             SM-->>Res: undefined
         end
     end
@@ -158,7 +157,8 @@ sequenceDiagram
     Res->>Nix: currentSystem(cfg, flakeDir)
     Res->>Nix: toInstallable("ci", flakeDir, system)
     Nix-->>Res: /path#devShells.x86_64-linux.ci
-    Note over Res: paths derived from the storage key:<br/>remote/extensions/<key>, remote/data/<key>,<br/>remote/profiles/<key>/devshell
+    Note over Res: paths derived from the storage key:<br/>remote/extensions/<key>, remote/data/<key>
+    Res->>FS: ensureProfile(cfg, folder, devShell)<br/><folder>/.vscode/nix-develop/<devShell>/devshell + .gitignore<br/>(undefined when nixDevelop.profile is none)
 
     rect rgb(60, 50, 30)
         Note over Res,NixCLI: One capture serves extensions and settings
@@ -166,7 +166,7 @@ sequenceDiagram
         Nix->>NixCLI: bash -c DUMP_SCRIPT (baseline, no devShell)
         Nix->>Nix: developCommand(...) — mkdir profile dir
         Nix->>NixCLI: nix develop <installable> --profile <p> --command bash -c DUMP_SCRIPT
-        Note right of NixCLI: builds the devShell<br/>--profile makes it a GC root
+        Note right of NixCLI: builds the devShell<br/>--profile makes it a GC root that stays<br/>until the user deletes .vscode/nix-develop
         NixCLI-->>Nix: NUL-delimited env, written to a temp file
         Nix-->>Res: CaptureResult { inside, baseline }
         Note over Res: a failure here is logged, not fatal —<br/>the window opens without what the flake declared
@@ -189,13 +189,10 @@ sequenceDiagram
         Note over Res,Server: Start the server inside the shell
         Res->>SM: start({ key, commit, launcher, installable, profile, dirs })
         SM->>SM: connectionToken = randomUUID()
-        SM->>Nix: developCommand(cfg, { installable, profile, command: [bash, -c, SERVER_WRAPPER, …] })
+        SM->>Nix: developCommand(cfg, { installable, profile, command: [<launcher>, --start-server, …] })
         Nix-->>SM: { exe: nix, args: [--extra-experimental-features …, develop, …] }
-        SM->>Shell: spawn(detached, env += NIX_DEVELOP_LOCK / _PROFILE / _LOCK_TOKEN / _HOST_SHELL)
-        Note right of Shell: nix develop --command *execs*,<br/>so the shell keeps the spawned pid
-        Shell->>Shell: fix up SHELL (compgen probe), unset the NIX_DEVELOP_* vars
-        Shell->>Shell: trap __nd_release EXIT, trap 'exit 143' TERM HUP INT
-        Shell->>Server: <launcher> --start-server --enable-remote-auto-shutdown --port 0 …
+        SM->>Server: spawn(detached, nix develop … --command <launcher> --start-server …)
+        Note right of Server: nix develop --command *execs*,<br/>so the launcher keeps the spawned pid —<br/>nothing of ours sits in between
         Server-->>SM: stdout "Extension host agent listening on 41263"
         SM->>SM: awaitListening() resolves, then child.unref()
         SM->>FS: write server/instances/<key>.json { port, token, pid, commit, profile }
@@ -242,41 +239,46 @@ Nothing asks the server to exit, so it settles that itself.
 ```mermaid
 sequenceDiagram
     autonumber
+    participant Code as VS Code (next start)
+    participant SM as ServerManager
     participant Server as code-server
-    participant Shell as bash (SERVER_WRAPPER)
     participant FS as globalStorage
-    participant Nix as nix store
 
     Note over Server: last extension host disconnects
     Server->>Server: --enable-remote-auto-shutdown: 5 min timer
     alt a host reconnects
         Server->>Server: timer cancelled — reloads and reopens keep this server
     else timer fires
-        Server-->>Shell: exit
-        Shell->>Shell: EXIT trap → __nd_release
-        Shell->>FS: read the lock, token still ours?
-        alt a successor already overwrote the lock
-            Note right of Shell: leave it — the new server's GC root<br/>must not be pulled out from under it
-        else still ours
-            Shell->>Nix: rm profile + profile-<n>-link
-            Note right of Nix: the indirect root under<br/>/nix/var/nix/gcroots/auto is left dangling,<br/>which is what `nix store gc` clears
-            Shell->>FS: rm the lock
+        Server->>Server: exit
+        Note over FS: the lock stays — nothing of ours runs<br/>inside the devShell to remove it
+    end
+
+    Code->>SM: activate() → sweep()
+    SM->>FS: read every server/instances/*.json
+    loop each lock
+        SM->>SM: portOpen(lock.port)?
+        alt nothing answers
+            SM->>FS: rm the lock
+        else still serving
+            Note right of SM: leave it — that server is in use
         end
     end
+    Note over SM: the devShell GC roots are untouched:<br/>they outlive every server that enters them
 ```
 
-`ServerManager.stop` (the `Stop devShell server` command) and `findRunning` do the same
-release from the extension side — the first for an explicit stop, the second as the
-backstop for a server killed without its wrapper getting to run (SIGKILL, OOM, reboot).
-All three are idempotent, so the order they arrive in does not matter.
+`ServerManager.stop` (the `Stop devShell server` command) and `findRunning` clear the one
+lock they are about — the first for an explicit stop, the second when the lock it just read
+names a dead port. `sweep` is what clears the rest. All three are idempotent, so the order
+they arrive in does not matter, and a lock that outlives its server is inert until one of
+them gets to it: every reader tests the port before trusting what the lock says.
 
 ## The three places state lives
 
 | Where | What | Lifetime |
 | --- | --- | --- |
 | The authority | folder, flakeDir, devShell | as long as the window or its "recently opened" entry |
-| `server/instances/<key>.json` | port, connection token, pid, commit, profile | until the server exits or is released |
-| `remote/profiles/<key>/devshell` | the Nix GC root for the built shell | until the last server for that shell goes |
+| `server/instances/<key>.json` | port, connection token, pid, commit, profile | until a sweep, a stop or a findRunning collects it |
+| `<folder>/.vscode/nix-develop/<devShell>/devshell` | the Nix GC root for the built shell | until the user deletes it (`nixDevelop.profile: none` writes none) |
 
 Nothing else persists. There is no setting recording the selection, and no registry mapping
 ids back to targets — which is what makes a restart, a reload and a fresh open all follow

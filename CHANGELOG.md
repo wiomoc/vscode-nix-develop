@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased
+
+- **The devShell's GC root is now the project's, and it stays.** It was written into the
+  extension's global storage and deleted the moment the server using it exited, which meant
+  every closed window handed a whole toolchain back to the next `nix store gc`: reopening
+  the folder rebuilt or re-fetched it, and offline it simply failed. A profile per devShell
+  now lives at `.vscode/nix-develop/<devShell>/devshell`, beside the project, and nothing
+  removes it -- the directory is the user's to delete, and a `.gitignore` covering the whole
+  of it is written alongside, so none of it can be committed. This is what `nix-direnv` does
+  with `.direnv/`, for the reason it gives: losing a project's build cache to a garbage
+  collection, on a flight, is not a trade worth making silently.
+- **`nixDevelop.profile` chooses between that and no root at all.** `persistent` (the
+  default) is the above; `none` passes no `--profile` and writes nothing into the project.
+  `none` is not as bare as it sounds -- Nix's GC scans `/proc` for store paths a live
+  process references, so a *running* server is largely spared -- but nothing covers the gap
+  between building the shell and starting the server, nothing survives the server's exit,
+  and a GC whose scan ran before the server appeared does not see it at all. A devShell name
+  that is not a usable path component (`.#ci`, `github:owner/repo#ci`) is sanitised and
+  carries a digest of the original, so two shells cannot share one root.
+- **The server no longer runs under a shell of ours.** `SERVER_WRAPPER` -- the bash script
+  that supervised the server so an `EXIT` trap could release the lock and the profile -- is
+  gone, and `nix develop --command` now execs straight into the launcher. Nothing is
+  interposed between the extension and the server, and nothing carries the extension's
+  bookkeeping variables into the shell the window's terminals inherit.
+- **Cleanup moved to where the extension can see it.** With no trap, a server that retires
+  itself leaves its lock file behind. A lock is a claim about a port and every reader tests
+  that port first, so a stale one is inert rather than wrong. `ServerManager.sweep` now runs
+  at activation and drops every lock whose port nothing answers on; `stop` and `findRunning`
+  still clear the one lock they are about. The trade is honest: a lock can outlive its
+  server until an editor next starts, and in exchange there is no shell inside the devShell.
+- Dropped with the wrapper: the `SHELL` fix-up that replaced nixpkgs' readline-less
+  `bash-minimal` with the host's login shell for the window's terminals. Nothing does that
+  now; a devShell that puts `bash-minimal` on `PATH` will have it in terminals.
+
 ## 0.6.3
 
 - The window title now names the devShell when it is not `default`: `[devShell: ci]` rather

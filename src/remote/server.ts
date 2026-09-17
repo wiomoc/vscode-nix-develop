@@ -14,92 +14,6 @@ import { run } from "../utils/run-subprocess";
 /** Printed by the server once the extension host agent is accepting connections. */
 const LISTENING = /Extension host agent listening on (\d+)/;
 
-/**
- * The shell the server runs under: it fixes up SHELL, then supervises the server and
- * releases what it held once it exits.
- *
- * Supervising is only possible because nothing in the chain daemonizes. `nix develop
- * --command` *execs*, so this script inherits the pid the extension spawned;
- * `bin/code-server` runs `node` as a child and waits on it. Ending in `exec "$@"`, as this
- * once did, threw that away -- the moment the server exited there was no longer a process
- * to notice. Running the server as a child instead costs one shell and buys a cleanup hook
- * that fires whether the server was stopped or retired itself in the background.
- */
-export const SERVER_WRAPPER = [
-  // ------------------------------------------------------------- session shell
-  //
-  // `nix develop` sets SHELL to the bash it puts on PATH, which is nixpkgs' *minimal*
-  // build: no readline, and no programmable completion. VS Code picks the terminal shell
-  // from SHELL, so every terminal in a devShell window would get a bash with no line
-  // editing, no history, no completion, and prompt markers printed literally as `\[` and
-  // `\]`.
-  //
-  // SHELL is session-owned -- the same reason the environment filter drops it when applying
-  // a devShell to a local window. The devShell environment is inherited either way; only
-  // the choice of shell binary changes.
-  // Is this a shell a person could actually use interactively? For bash that means asking
-  // whether `compgen` exists: it is a programmable-completion builtin, present in
-  // bashInteractive and absent from exactly the readline-less builds that cause the
-  // problem. Anything that is not bash is taken at face value.
-  "__nd_ok() {",
-  '  [ -n "$1" ] && [ -x "$1" ] || return 1',
-  '  case "${1##*/}" in',
-  '    bash) "$1" -c "compgen -e >/dev/null" >/dev/null 2>&1 ;;',
-  "    *) return 0 ;;",
-  "  esac",
-  "}",
-  // Preference order: what the devShell chose, then the user's login shell, then any
-  // usable bash the devShell puts on PATH (`packages = [ bashInteractive ]`). A devShell
-  // that sets SHELL itself always wins; the rest is a fallback for shells that provide
-  // no interactive shell at all.
-  'if ! __nd_ok "$SHELL"; then',
-  '  if __nd_ok "$NIX_DEVELOP_HOST_SHELL"; then',
-  '    export SHELL="$NIX_DEVELOP_HOST_SHELL"',
-  "  else",
-  "    __nd_bash=$(command -v bash 2>/dev/null)",
-  '    if __nd_ok "$__nd_bash"; then export SHELL="$__nd_bash"; fi',
-  "    unset __nd_bash",
-  "  fi",
-  "fi",
-  "unset NIX_DEVELOP_HOST_SHELL",
-  "unset -f __nd_ok",
-
-  // ------------------------------------------------------------------- release
-  //
-  // What the server holds is a lock file and the profile rooting its devShell. Both are
-  // read out of the environment and then unset, so they do not leak into the server -- and
-  // from there into every terminal the devShell window opens.
-  "__nd_lock=${NIX_DEVELOP_LOCK-}",
-  "__nd_profile=${NIX_DEVELOP_PROFILE-}",
-  "__nd_token=${NIX_DEVELOP_LOCK_TOKEN-}",
-  "unset NIX_DEVELOP_LOCK NIX_DEVELOP_PROFILE NIX_DEVELOP_LOCK_TOKEN",
-
-  "__nd_release() {",
-  '  [ -n "$__nd_lock" ] && [ -n "$__nd_token" ] && [ -f "$__nd_lock" ] || return 0',
-  // The profile is shared by every server for this devShell, so releasing it blindly would
-  // pull the GC root out from under a *successor*: a server that exits while its
-  // replacement is already starting would delete the new one's root. The lock names one
-  // server, and a successor has already overwritten it with its own token, so matching the
-  // token is what makes this specific to the server that is leaving. `$(<file)` keeps the
-  // check a bash builtin; `rm` is the only external command this needs.
-  '  case "$(<"$__nd_lock")" in *"$__nd_token"*) ;; *) return 0 ;; esac',
-  // Generations before the lock, so an interrupted release leaves the lock pointing at what
-  // is left rather than orphaning it.
-  '  if [ -n "$__nd_profile" ]; then',
-  '    for __nd_gen in "$__nd_profile" "$__nd_profile"-*-link; do',
-  '      [ -L "$__nd_gen" ] && rm -f -- "$__nd_gen"',
-  "    done",
-  "  fi",
-  '  rm -f -- "$__nd_lock"',
-  "}",
-  "trap __nd_release EXIT",
-  // Without these, a SIGTERM to the process group kills this shell outright and the EXIT
-  // trap never runs. Turning the signal into an `exit` routes it through the trap instead.
-  "trap 'exit 143' TERM HUP INT",
-
-  '"$@"',
-].join("\n");
-
 export interface ServerHandle {
   port: number;
   connectionToken: string;
@@ -110,8 +24,6 @@ interface LockFile extends ServerHandle {
   installable: string;
   commit: string;
   startedAt: number;
-  /** GC root for the shell the server runs in, so it can be released when the server goes. */
-  profile?: string;
 }
 
 /**
@@ -204,7 +116,9 @@ export class ServerManager {
     const tarball = path.join(tmp, "server.tar.gz");
 
     try {
-      await download(url, tarball);
+      await download(url, tarball, (percent) => {
+        progress?.(`Downloading the VS Code server… (${percent}%)`);
+      });
       progress?.("Extracting the VS Code server…");
       await run("tar", ["-xzf", tarball, "-C", tmp], {
         cwd: tmp,
@@ -216,7 +130,7 @@ export class ServerManager {
       // wraps everything in a single `vscode-server-<platform>` directory, VSCodium's has
       // no wrapper at all. Unpacking flat and then looking for the real root handles both
       // without having to be told which one this is.
-      const root = await distributionRoot(tmp);
+      const root = await findDistributionRoot(tmp);
       if (!root) {
         throw new Error(
           `the downloaded archive contains no server distribution (from ${url})`,
@@ -320,7 +234,7 @@ export class ServerManager {
     const lock = await this.readLock(key);
     if (!lock) return undefined;
 
-    if (!(await portOpen(lock.port))) {
+    if (!(await isPortOpen(lock.port))) {
       await this.release(key, lock);
       return undefined;
     }
@@ -335,30 +249,60 @@ export class ServerManager {
   }
 
   /**
-   * Give up what a departed server held: the lock, and the profile that pinned its shell.
+   * Give up what a departed server held: its lock.
    *
-   * The profile is the devShell's only GC root, so leaving it behind keeps a whole
-   * toolchain alive in the store for a server that no longer exists. Nix's own indirect
-   * root under `/nix/var/nix/gcroots/auto` points *at* these symlinks and is not ours to
-   * remove; removing them is what leaves it dangling, which is what `nix store gc` clears.
+   * The devShell's GC root is not touched. A profile under `.vscode/nix-develop/` is meant
+   * to outlive the servers that enter it -- that is the whole of
+   * `nixDevelop.profile: persistent` -- so the store paths stay put for the next window,
+   * offline or not, and the directory is the user's to delete.
    *
-   * `SERVER_WRAPPER` does the same thing from inside the devShell, which is what covers a
-   * server that retires itself while no window is open. This is the same work in the two
-   * places the extension is the one that knows: an explicit stop, and finding a lock whose
-   * server died without its wrapper getting to run. Both are idempotent, so it does not
-   * matter which one arrives first.
+   * Nothing runs inside the devShell to do this at the moment a server exits: the server is
+   * the process `nix develop` execs into, with no shell of ours around it. So a lock is
+   * cleaned up by whoever next looks at it -- `sweep`, `findRunning` or `stop` -- and until
+   * then it is a lock naming a port nothing answers on, which every reader already checks
+   * for. All three are idempotent, so the order they arrive in does not matter.
    */
   private async release(key: string, lock: LockFile): Promise<void> {
     await fs.rm(this.lockPath(key), { force: true });
-    // Locks written before servers recorded their profile leave one behind; there is
-    // nothing to go on, and inferring the path here would put the resolver's storage
-    // layout in a second place.
-    if (lock.profile) await removeProfile(lock.profile);
-    log.info(
-      lock.profile
-        ? `released the lock and the profile for the devShell server on port ${lock.port}`
-        : `released the lock for the devShell server on port ${lock.port}`,
-    );
+    log.info(`released the lock for the devShell server on port ${lock.port}`);
+  }
+
+  /**
+   * Drop every lock whose server is gone.
+   *
+   * A server that retires itself -- five minutes after its last window closes -- leaves its
+   * lock behind, because nothing of ours is running at that moment to remove it. `stop` and
+   * `findRunning` clear the one lock they are about; this is what clears the rest, and it
+   * runs at activation, when a stale lock is exactly what a just-started editor is likely
+   * to be looking at.
+   *
+   * A closed port is the test, as everywhere else. Reading a malformed or half-written lock
+   * yields nothing and is left alone rather than deleted: an unreadable file here is not
+   * evidence that a server is gone.
+   */
+  async sweep(): Promise<number> {
+    const dir = path.join(this.root, "instances");
+    const names = await fs.readdir(dir).catch(() => [] as string[]);
+    let released = 0;
+    for (const name of names) {
+      if (!name.endsWith(".json")) continue;
+      const key = name.slice(0, -".json".length);
+      const lock = await this.readLock(key);
+      if (!lock) continue;
+      if (await isPortOpen(lock.port)) continue;
+      try {
+        await this.release(key, lock);
+        released++;
+      } catch (err) {
+        log.warn(`could not release the stale lock ${name}: ${err}`);
+      }
+    }
+    if (released > 0) log.info(`swept ${released} stale devShell server lock(s)`);
+    return released;
+  }
+
+  private static async isStopped(lock: LockFile): Promise<boolean> {
+    return !(await isPortOpen(lock.port)) && !groupAlive(lock.pid);
   }
 
   /**
@@ -387,14 +331,13 @@ export class ServerManager {
     // Confirm it actually stopped rather than reporting success optimistically. The socket
     // closes before the process exits, so both have to be waited on.
     const deadline = Date.now() + 10_000;
-    while (
-      Date.now() < deadline &&
-      ((await portOpen(lock.port)) || groupAlive(lock.pid))
-    ) {
+    let stopped = await ServerManager.isStopped(lock);
+    while (Date.now() < deadline && !stopped) {
       await delay(200);
+      stopped = await ServerManager.isStopped(lock);
     }
 
-    if ((await portOpen(lock.port)) || groupAlive(lock.pid)) {
+    if (!stopped) {
       for (const target of [-lock.pid, lock.pid]) {
         try {
           process.kill(target, "SIGKILL");
@@ -404,14 +347,20 @@ export class ServerManager {
         }
       }
       const hard = Date.now() + 3_000;
-      while (Date.now() < hard && groupAlive(lock.pid)) await delay(100);
+      stopped = await ServerManager.isStopped(lock);
+      while (Date.now() < hard && !stopped) {
+        await delay(100);
+        stopped = await ServerManager.isStopped(lock);
+      }
     }
 
-    const stopped = !(await portOpen(lock.port));
-    // The profile goes back only once nothing is serving on that port: a server that
-    // survived both signals still needs the shell it was started in.
-    if (stopped) await this.release(key, lock);
-    else await fs.rm(this.lockPath(key), { force: true });
+    try {
+      await this.release(key, lock);
+    } catch (err) {
+      log.warn(
+        `failed to release the lock for the devShell server on port ${lock.port}: ${err}`,
+      );
+    }
     log.info(
       stopped
         ? `stopped the devShell server on port ${lock.port}`
@@ -431,8 +380,8 @@ export class ServerManager {
     launcher: string;
     installable: string;
     flakeDir: string;
-    /** GC root for the shell the server runs in; see `DevelopOptions.profile`. */
-    profile: string;
+    /** GC root for the shell the server runs in, if any; see `DevelopOptions.profile`. */
+    profile: string | undefined;
     extensionsDir: string;
     serverDataDir: string;
     progress?: (m: string) => void;
@@ -443,15 +392,13 @@ export class ServerManager {
     await fs.mkdir(path.dirname(this.lockPath(opts.key)), { recursive: true });
 
     // How to enter a devShell belongs to `nix.ts`; what to run once inside it is the only
-    // part this file gets an opinion about.
+    // part this file gets an opinion about. `nix develop --command` execs, so the launcher
+    // *is* the process this spawn returns -- nothing is interposed between the extension
+    // and the server.
     const { exe, args } = await developCommand(this.cfg, {
       installable: opts.installable,
       profile: opts.profile,
       command: [
-        "bash",
-        "-c",
-        SERVER_WRAPPER,
-        "nix-develop",
         opts.launcher,
         "--start-server",
         // Servers outlive the window that started them so the next one attaches instantly,
@@ -486,17 +433,9 @@ export class ServerManager {
     // lock file is how a later window finds it again.
     const child = spawn(exe, args, {
       cwd: opts.flakeDir,
-      env: {
-        ...process.env,
-        // All four are read back inside the devShell by SERVER_WRAPPER, which unsets them
-        // before running the server so they never reach the user's terminals.
-        ...(process.env.SHELL
-          ? { NIX_DEVELOP_HOST_SHELL: process.env.SHELL }
-          : {}),
-        NIX_DEVELOP_LOCK: this.lockPath(opts.key),
-        NIX_DEVELOP_PROFILE: opts.profile,
-        NIX_DEVELOP_LOCK_TOKEN: connectionToken,
-      },
+      // Nothing of ours is added: whatever this process is given, the devShell window's
+      // terminals, tasks and debuggers inherit.
+      env: { ...process.env },
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -514,7 +453,6 @@ export class ServerManager {
       installable: opts.installable,
       commit: opts.commit,
       startedAt: Date.now(),
-      profile: opts.profile,
     };
     await fs.writeFile(this.lockPath(opts.key), JSON.stringify(lock, null, 2));
     log.info(
@@ -580,24 +518,6 @@ export class ServerManager {
   }
 }
 
-/**
- * Undo what `nix develop --profile` wrote: `<profile>` pointing at `<profile>-<n>-link`,
- * one link per generation, all in the same directory. Matching that shape rather than
- * emptying the directory keeps this to what Nix actually put there.
- */
-async function removeProfile(profile: string): Promise<void> {
-  const dir = path.dirname(profile);
-  const base = path.basename(profile);
-  const names = await fs.readdir(dir).catch(() => [] as string[]);
-  await Promise.all(
-    names
-      .filter(
-        (n) => n === base || (n.startsWith(`${base}-`) && n.endsWith("-link")),
-      )
-      .map((n) => fs.rm(path.join(dir, n), { force: true })),
-  );
-}
-
 /** Parse a JSON file, or nothing if it is missing or malformed. */
 async function readJson(
   file: string,
@@ -616,7 +536,7 @@ async function readJson(
  * Find the directory a freshly unpacked distribution actually starts at: the extraction
  * directory itself, or the single wrapper directory inside it.
  */
-async function distributionRoot(dir: string): Promise<string | undefined> {
+export async function findDistributionRoot(dir: string): Promise<string | undefined> {
   if (await exists(path.join(dir, "product.json"))) return dir;
   const entries = await fs
     .readdir(dir, { withFileTypes: true })
@@ -627,7 +547,7 @@ async function distributionRoot(dir: string): Promise<string | undefined> {
   return (await exists(path.join(inner, "product.json"))) ? inner : undefined;
 }
 
-function portOpen(port: number): Promise<boolean> {
+export function isPortOpen(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = net.connect({ host: "127.0.0.1", port });
     const done = (ok: boolean) => {
@@ -645,8 +565,11 @@ function portOpen(port: number): Promise<boolean> {
  * `curl` is not guaranteed to exist, and the download is large enough that buffering it in
  * memory is wasteful, so stream it with the platform fetch into a file.
  */
-async function download(url: string, dest: string): Promise<void> {
+async function download(url: string, dest: string, progress?: (percent: number) => void): Promise<void> {
   const res = await fetch(url, { redirect: "follow" });
+  const contentLength = parseInt(res.headers.get("content-length") as string);
+  let downloaded = 0;
+  let lastPercent = -1;
   if (!res.ok || !res.body) {
     throw new Error(
       `downloading the server failed: HTTP ${res.status} ${res.statusText}`,
@@ -661,6 +584,14 @@ async function download(url: string, dest: string): Promise<void> {
       if (done) break;
       if (!out.write(value)) {
         await new Promise<void>((resolve) => out.once("drain", resolve));
+      }
+      if (!isNaN(contentLength)) {
+        downloaded += value.length;
+        const percent = Math.floor((downloaded / contentLength) * 100);
+        if (percent > lastPercent) {
+          lastPercent = percent;
+          progress?.(percent);
+        }
       }
     }
     await new Promise<void>((resolve, reject) => {
@@ -688,9 +619,3 @@ function groupAlive(pid: number): boolean {
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-
-/** Exported for tests: is something accepting connections on this loopback port? */
-export const isPortOpen = portOpen;
-
-/** Exported for tests: where does an unpacked distribution begin? */
-export const findDistributionRoot = distributionRoot;

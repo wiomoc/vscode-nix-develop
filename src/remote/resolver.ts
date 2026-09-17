@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { readConfig, type NixDevelopConfig } from "../config";
+import { ensureProfile } from "../profile";
 import { log } from "../utils/log";
 import {
   captureEnv,
@@ -136,7 +137,10 @@ export class NixDevelopResolver implements vscode.RemoteAuthorityResolver {
     const serverDataDir = path.join(root, "data", key);
     // One profile per devShell, shared by everything that enters it: reading the
     // environment and running the server are the same shell, so they are the same GC root.
-    const profile = path.join(root, "profiles", key, "devshell");
+    // It lives beside the project rather than in global storage, and it stays there --
+    // see `ensureProfile`. `undefined` is `nixDevelop.profile: none`, or a folder that
+    // could not be written to.
+    const profile = await ensureProfile(cfg, target.folder, target.devShell);
 
     // One capture serves both: the extensions the devShell declares and the settings it
     // declares are two attributes of the same shell.
@@ -203,7 +207,7 @@ export class NixDevelopResolver implements vscode.RemoteAuthorityResolver {
     cfg: NixDevelopConfig;
     target: RemoteTarget;
     installable: string;
-    profile: string;
+    profile: string | undefined;
     progress: (m: string) => void;
   }): Promise<CaptureResult | undefined> {
     if (

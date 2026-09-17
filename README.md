@@ -47,6 +47,7 @@ The status bar shows the active devShell; click it to switch. In a local window 
 | `nixDevelop.extraArgs` | `[]` | Extra arguments for `nix develop` |
 | `nixDevelop.nixPath` | `"nix"` | Path to the `nix` binary |
 | `nixDevelop.buildTimeoutSeconds` | `1800` | Abort a build after this long |
+| `nixDevelop.profile` | `"persistent"` | Keep a Nix GC root per devShell in `.vscode/nix-develop/`, or `"none"` to root nothing |
 | `nixDevelop.remote.extensions` | `[]` | Extension IDs to install into the devShell |
 | `nixDevelop.remote.extensionsFromFlake` | `true` | Also read `vscodeExtensions` from the devShell |
 | `nixDevelop.remote.settings` | `{}` | Editor settings to apply inside the devShell window |
@@ -74,6 +75,8 @@ user typing `nix develop` gets:
 ```
 nix develop <installable> --profile <gcroot> --command bash -c '<dump>' <outfile>
 ```
+
+(`--profile` is dropped when `nixDevelop.profile` is `"none"`.)
 
 Details that matter:
 

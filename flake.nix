@@ -106,7 +106,7 @@
               "nix.enableLanguageServer" = true;
               "nix.serverPath" = "${pkgs.nil}/bin/nil";
               "nix.formatterPath" = "${pkgs.nixfmt}/bin/nixfmt";
-              "workbench.externalBrowser" = "${pkgs.firefox}/bin/firefox";
+              "workbench.externalBrowser" = "${pkgs.chromium}/bin/chromium";
             };
 
             shellHook = ''

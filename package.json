@@ -118,6 +118,20 @@
           "scope": "resource",
           "description": "Abort the devShell build after this many seconds."
         },
+        "nixDevelop.profile": {
+          "type": "string",
+          "enum": [
+            "persistent",
+            "none"
+          ],
+          "default": "persistent",
+          "scope": "resource",
+          "enumDescriptions": [
+            "Keep a Nix profile per devShell under .vscode/nix-develop/, and leave it there. The built shell survives `nix store gc`, so reopening the folder -- offline, or after a garbage collection -- costs nothing. The directory is gitignored for you; delete it to release the store paths.",
+            "Pass no --profile. Nothing roots the devShell: `nix store gc` may collect it between building the shell and starting the server, and will collect it once the server exits. Nothing is written into the project."
+          ],
+          "markdownDescription": "How the built devShell is kept alive against `nix store gc`.\n\n`--profile` is the only thing that makes a devShell a GC root. `persistent` writes one per devShell under `.vscode/nix-develop/<devShell>/` -- next to the project, with a `.gitignore` covering the whole directory -- and never removes it, so the toolchain a window needs is still there after a garbage collection or on a flight. `none` writes nothing into the project and accepts that the shell may be collected; on Linux, Nix's GC still spares store paths a *running* process references, so this mostly costs you rebuilds rather than a broken window."
+        },
         "nixDevelop.remote.extensions": {
           "type": "array",
           "items": {
@@ -206,7 +220,7 @@
     "test:server": "node test/build.mjs && NIX_DEVELOP_E2E=1 NIX_DEVELOP_COMMIT=$(code --version | sed -n 2p) node out/test.cjs"
   },
   "devDependencies": {
-    "@types/node": "^20.14.0",
+    "@types/node": "^20.19.43",
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^3.2.1",
     "esbuild": "^0.24.0",

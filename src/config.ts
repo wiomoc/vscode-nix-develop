@@ -8,6 +8,8 @@ export interface NixDevelopConfig {
   extraArgs: string[];
   nixPath: string;
   buildTimeoutSeconds: number;
+  /** See `nixDevelop.profile`, and `ProfileMode` in `profile.ts`. */
+  profile: "persistent" | "none";
   remote: RemoteConfig;
 }
 
@@ -42,6 +44,7 @@ export function readConfig(scope: vscode.WorkspaceFolder | undefined): NixDevelo
     extraArgs: c.get<string[]>("extraArgs", []),
     nixPath: c.get<string>("nixPath", "nix") || "nix",
     buildTimeoutSeconds: c.get<number>("buildTimeoutSeconds", 1800),
+    profile: c.get<"persistent" | "none">("profile", "persistent"),
     remote: {
       extensions: c.get<string[]>("remote.extensions", []),
       extensionsFromFlake: c.get<boolean>("remote.extensionsFromFlake", true),

@@ -76,14 +76,20 @@ export interface DevelopOptions {
   /** A full flake installable, as produced by `toInstallable`. */
   installable: string;
   /**
-   * Where Nix keeps the built shell.
+   * Where Nix keeps the built shell, or `undefined` for no GC root at all.
    *
-   * Required, deliberately. `--profile` is the only thing that makes a devShell a GC root:
-   * without one, `nix store gc` is free to collect paths that a running server -- or the
-   * next activation -- still depends on. It is also what makes re-entering the shell
-   * near-instant. Making it part of the type means no caller can forget it.
+   * `--profile` is the only thing that makes a devShell a GC root: without one, `nix store
+   * gc` is free to collect paths that a running server -- or the next activation -- still
+   * depends on. Nix's GC does scan `/proc` for store paths a live process references, so a
+   * running server is not defenceless, but that covers neither the gap between building the
+   * shell and starting the server nor a GC whose scan happened before the server appeared.
+   *
+   * Whether to keep one is the user's call (`nixDevelop.profile`), so this is nullable --
+   * but not optional. Making it part of the type means a caller has to say which it wants
+   * rather than silently omitting the root; `ensureProfile` in `profile.ts` is what
+   * answers the question.
    */
-  profile: string;
+  profile: string | undefined;
   /** argv exec'd inside the shell, via `--command`. */
   command: string[];
 }
@@ -102,11 +108,10 @@ export async function developCommand(
   opts: DevelopOptions,
 ): Promise<NixCommand> {
   // Nix writes the profile symlinks itself, but will not create the directory holding them.
-  await fs.mkdir(path.dirname(opts.profile), { recursive: true });
+  if (opts.profile) await fs.mkdir(path.dirname(opts.profile), { recursive: true });
   return nixCommand(cfg, ["develop"], [
     opts.installable,
-    "--profile",
-    opts.profile,
+    ...(opts.profile ? ["--profile", opts.profile] : []),
     ...cfg.extraArgs,
     "--command",
     ...opts.command,
@@ -296,7 +301,7 @@ export async function captureEnv(
   cfg: NixDevelopConfig,
   installable: string,
   dir: string,
-  profilePath: string,
+  profilePath: string | undefined,
   token?: vscode.CancellationToken,
   onProgress?: (line: string) => void,
 ): Promise<CaptureResult> {

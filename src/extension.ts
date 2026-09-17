@@ -14,6 +14,7 @@ import {
   showRemoteEnvironment,
   showRemoteExtensions,
   switchDevShellInRemoteWindow,
+  sweepServerLocks,
 } from "./remote";
 import { DevShellSession, type SessionHost } from "./session";
 import { registerResourceLabelFormatter, StatusBar } from "./ui";
@@ -44,6 +45,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(initLog());
 
   registerResolver(context);
+  // Housekeeping, not a precondition: nothing below waits for it.
+  void sweepServerLocks(context);
 
   statusBar = new StatusBar();
   context.subscriptions.push(statusBar);
@@ -91,7 +94,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         );
         return;
       }
-      await showRemoteEnvironment(context);
+      await showRemoteEnvironment();
     }),
 
     vscode.commands.registerCommand("nixDevelop.showLog", () => log.show()),

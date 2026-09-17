@@ -15,6 +15,7 @@ const cfg: NixDevelopConfig = {
   extraArgs: [],
   nixPath: "nix",
   buildTimeoutSeconds: 1800,
+  profile: "persistent",
   remote: {
     extensions: [],
     extensionsFromFlake: true,
@@ -113,7 +114,7 @@ export async function run(): Promise<void> {
 
   const extensionsDir = path.join(storage, "ext");
   const serverDataDir = path.join(storage, "data");
-  const profile = path.join(storage, "profiles", "testkey", "devshell");
+  const profile = path.join(work, ".vscode", "nix-develop", "default", "devshell");
   const key = "testkey";
 
   await test("patches the server's node against a nixpkgs glibc", async () => {
@@ -293,22 +294,6 @@ export async function run(): Promise<void> {
       }
     });
 
-    await test("the server keeps the user's login shell, not the devShell's minimal bash", async () => {
-      // nixpkgs' bash-minimal has no readline: VS Code would give every terminal a shell
-      // with no history, no completion, and literal prompt markers.
-      const hostShell = process.env.SHELL;
-      if (!hostShell) {
-        console.log("       (no SHELL in this environment; skipping)");
-        return;
-      }
-      const pids = await serverPids(storage);
-      const shells = await Promise.all(pids.map(async (p) => (await readProcEnv(p)).SHELL));
-      ok(shells.includes(hostShell), `expected SHELL=${hostShell}, got ${JSON.stringify(shells)}`);
-      for (const s of shells) {
-        ok(!/bash-minimal/.test(s ?? ""), `server SHELL points at a minimal bash: ${s}`);
-      }
-    });
-
     await test("a second resolve reuses the running server instead of starting another", async () => {
       const found = await manager.findRunning(key, commit);
       ok(!!found, "the lock file should let another window attach");
@@ -358,11 +343,10 @@ export async function run(): Promise<void> {
       eq(survivors, [], `a server process outlived stop():\n    ${detail.join("\n    ")}`);
     });
 
-    await test("stopping hands the devShell's GC root back to Nix", async () => {
-      // The profile is the only thing rooting the shell's store paths. Once nothing is
-      // serving, holding it would pin a whole toolchain for a server that is gone.
-      const left = await fs.readdir(path.dirname(profile)).catch(() => [] as string[]);
-      eq(left.filter((n) => n.startsWith("devshell")), [], "profile generations were left behind");
+    await test("stopping leaves the devShell's GC root in place", async () => {
+      // The profile is the project's, not the stopped server's: it is what keeps the shell
+      // out of the next `nix store gc`, so the folder reopens without a rebuild.
+      ok(await exists(profile), "the profile should survive the server it was built for");
     });
     await fs.rm(storage, { recursive: true, force: true }).catch(() => undefined);
     await fs.rm(work, { recursive: true, force: true }).catch(() => undefined);
@@ -420,12 +404,12 @@ async function cmdlineOf(pid: number): Promise<string> {
 
 /**
  * The guarantee the whole idle-shutdown design exists for: a devShell nobody is using stops
- * costing a Node process and a pinned toolchain, without anyone asking it to.
+ * costing a Node process, without anyone asking it to.
  *
  * It gets its own server rather than joining `run()`, because proving it means letting that
  * server die -- which would strand every test after it. Nothing of the extension is alive
- * while the wait happens, which is the point: the only thing that can release the lock and
- * the profile is the wrapper shell the server runs under.
+ * while the wait happens, which is the point: the lock outlives the server it names, and
+ * stays until something on this side looks at it again.
  *
  * Opt-in, because the server's grace period is a fixed five minutes and no flag shortens it
  * without also making a window reload tear the server down.
@@ -454,7 +438,7 @@ export async function runIdleShutdown(): Promise<void> {
   }
 
   const key = "idlekey";
-  const profile = path.join(storage, "remote", "profiles", key, "devshell");
+  const profile = path.join(work, ".vscode", "nix-develop", "default", "devshell");
   const lock = path.join(storage, "server", "instances", `${key}.json`);
   let port = 0;
 
@@ -488,18 +472,14 @@ export async function runIdleShutdown(): Promise<void> {
       eq(await isPortOpen(port), false, "an idle server must not run forever");
     });
 
-    await test("its wrapper releases the lock and the profile on the way out", async () => {
-      const deadline = Date.now() + 30_000;
-      while (Date.now() < deadline && (await exists(lock))) {
-        await new Promise((r) => setTimeout(r, 500));
-      }
-      eq(await exists(lock), false, "the wrapper should have deleted the lock");
-      const left = await fs.readdir(path.dirname(profile)).catch(() => [] as string[]);
-      eq(
-        left.filter((n) => n.startsWith("devshell")),
-        [],
-        "the wrapper should have unlinked every profile generation",
-      );
+    await test("the lock outlives the server, and a sweep is what clears it", async () => {
+      // Nothing of ours runs inside the devShell, so an exiting server cannot tidy up after
+      // itself. The lock it leaves is inert -- it names a port nothing answers on -- and
+      // the next sweep, which the extension runs at activation, is what removes it.
+      ok(await exists(lock), "a retired server leaves its lock behind");
+      eq(await manager.sweep(), 1, "the sweep should release exactly this lock");
+      eq(await exists(lock), false, "and the lock should be gone afterwards");
+      ok(await exists(profile), "the devShell's GC root is not the sweep's to release");
     });
   } finally {
     await manager.stop(key).catch(() => undefined);

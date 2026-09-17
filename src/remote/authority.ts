@@ -26,15 +26,9 @@ const SEP = "\u0000";
  * A remote authority is `nix-develop+<base32 payload>`, and the payload *is* the target.
  *
  * The resolver runs in a different window from the one that created the authority and is
- * handed nothing but this string, so the alternative is a side table on disk mapping an
- * opaque digest back to its meaning. Encoding the target directly removes that table, and
- * with it the failure mode where an entry in "recently opened" outlives the mapping.
+ * handed nothing but this string.
  *
- * The encoding has to be **case-insensitive**, which is why this is base32 and not the
- * denser base64url. A URI authority is case-insensitive by RFC 3986, and VS Code acts on
- * that: an authority passed on the command line survives verbatim, but one restored from
- * persisted state after a restart comes back lower-cased. base64 does not survive that
- * round trip; base32's alphabet is a single case, so it does.
+ * A URI authority is case-insensitive by RFC 3986.
  *
  * The folder path is already visible in the URI's path component, so encoding it here
  * exposes nothing new.

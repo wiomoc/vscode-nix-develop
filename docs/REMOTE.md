@@ -123,23 +123,24 @@ restarts and reopens land on the same server. The same timer starts when the ser
 so one that is started and then never connected to is collected too. `Nix Develop: Stop
 devShell server` ends one immediately.
 
-A server that retires itself releases what it held on the way out, without needing the
-extension to be running. This works because nothing in the chain daemonizes: `nix develop
---command` *execs*, so the shell the extension spawns keeps the pid it was given, and
-`bin/code-server` runs `node` as a child and waits on it. That shell -- `SERVER_WRAPPER` --
-therefore outlives the server by exactly one step, and its `EXIT` trap deletes the lock and
-unlinks the profile, the devShell's only GC root. It traps `TERM`/`HUP`/`INT` too, since an
-untrapped signal would kill it outright and the `EXIT` trap would never fire.
+Nothing of ours runs inside the devShell alongside the server. `nix develop --command`
+*execs*, so the launcher is the process the extension spawned; there is no shell of ours
+between the two, and nothing to inherit the extension's environment and leak it into every
+terminal the window opens.
 
-Releasing is guarded by the connection token, because the profile is shared by every server
-for a given devShell: a server exiting while its replacement is already starting must not
-pull the new one's GC root out from under it. The successor has already overwritten the lock
-with its own token, so a token that no longer matches means there is nothing here to release.
+The cost is that a server which retires itself cannot tidy up after itself: it leaves its
+lock file behind. That is deliberate, and harmless. A lock is a claim about a port, and
+every reader tests the port before believing it, so a lock whose server is gone is inert
+rather than wrong -- it can neither hijack a window nor block a new server. Cleaning it up
+is the extension's job, in three places, all idempotent:
 
-The extension does the same work in the two places it is the one that knows: an explicit
-`Stop devShell server`, and `findRunning` meeting a lock whose port is dead. The latter is
-the backstop for a server whose wrapper never got to run -- a SIGKILL, an OOM kill, a
-reboot. All three paths are idempotent, so it does not matter which arrives first.
+- `ServerManager.sweep`, at activation, across every devShell at once. This is what
+  collects the servers that retired while no editor was running.
+- `findRunning`, when the lock it is about names a port nothing answers on.
+- `ServerManager.stop`, for an explicit `Stop devShell server`.
+
+None of them touch the devShell's GC root: a profile under `.vscode/nix-develop/` belongs
+to the project and outlives every server that enters it.
 
 `getCanonicalURI` maps `vscode-remote://nix-develop+…/x` back to `file:///x`. A devShell
 shares the machine's filesystem, so without it VS Code would treat the same file opened

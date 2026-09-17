@@ -20,8 +20,9 @@ host then spawns — terminals, tasks, debuggers, language servers — is a chil
 in the devShell, so it is in the shell for real rather than approximated.
 
 Three things persist, and nothing else: the authority (in the window and its history), a
-lock file naming the running server, and a Nix profile holding the built shell as a GC
-root.
+lock file naming the running server, and a Nix profile holding the built shell as a GC root
+— that one in the project, under `.vscode/nix-develop/`, where it outlives the servers that
+use it.
 
 ## Keeping the diagrams honest
 

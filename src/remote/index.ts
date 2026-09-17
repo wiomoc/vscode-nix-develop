@@ -4,6 +4,7 @@ import * as vscode from "vscode";
 import { isResolverAvailable, readConfig } from "../config";
 import { log } from "../utils/log";
 import { captureEnv, currentSystem, listDevShells, toInstallable } from "../nix";
+import { ensureProfile } from "../profile";
 import { computeDelta, renderDelta } from "../environment";
 import {
   AUTHORITY_PREFIX,
@@ -202,6 +203,27 @@ export async function killServer(
 }
 
 /**
+ * Clear out locks whose servers are gone.
+ *
+ * A devShell server outlives the window that started it and retires itself once it has
+ * been idle, which means the moment it exits there is nothing of ours running to tidy up
+ * after it -- the server is the process `nix develop` exec'd into, with no shell of ours
+ * wrapped around it. The extension is the one that notices, so it does the tidying, at the
+ * point a stale lock is most likely to be sitting there: the next time an editor starts.
+ *
+ * Nothing waits on this. A lock that outlives its server is inert -- every reader tests the
+ * port before trusting it -- so sweeping is housekeeping, not a precondition for anything.
+ */
+export async function sweepServerLocks(context: vscode.ExtensionContext): Promise<void> {
+  const cfg = readConfig(vscode.workspace.workspaceFolders?.[0]);
+  try {
+    await new ServerManager(context.globalStorageUri, cfg).sweep();
+  } catch (err) {
+    log.warn(`sweeping stale devShell server locks failed: ${(err as Error).message}`);
+  }
+}
+
+/**
  * Switch devShells from inside a devShell window.
  *
  * Such a window has no local workspace folder -- its folders are `vscode-remote://` URIs --
@@ -314,7 +336,7 @@ export async function offerExtensionSync(context: vscode.ExtensionContext): Prom
  * authority points at. Reporting "no devShell is active" inside a devShell window would be
  * plainly wrong.
  */
-export async function showRemoteEnvironment(context: vscode.ExtensionContext): Promise<void> {
+export async function showRemoteEnvironment(): Promise<void> {
   const authority = vscode.env.remoteAuthority;
   const target = authority ? decodeAuthority(authority) : undefined;
   if (!target) {
@@ -328,13 +350,9 @@ export async function showRemoteEnvironment(context: vscode.ExtensionContext): P
     async () => {
       const system = await currentSystem(cfg, target.flakeDir);
       const installable = toInstallable(target.devShell, target.flakeDir, system);
-      const profile = path.join(
-        context.globalStorageUri.fsPath,
-        "remote",
-        "profiles",
-        storageKeyFor(authority!),
-        "devshell",
-      );
+      // The same GC root the window's server runs under, so reading the environment
+      // re-enters the shell that is already built rather than rooting a second copy.
+      const profile = await ensureProfile(cfg, target.folder, target.devShell);
       const capture = await captureEnv(cfg, installable, target.flakeDir, profile);
       return renderDelta(computeDelta(capture), target.devShell);
     },
