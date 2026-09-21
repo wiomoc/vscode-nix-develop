@@ -1,4 +1,4 @@
-# Nix Develop
+# VSCode Nix Develop
 
 Open a workspace that has a `flake.nix`, pick a devShell, and VS Code uses it — terminals,
 tasks, debuggers and language servers all get the toolchain `nix develop` would have given
@@ -14,14 +14,66 @@ you.
 3. Gives each devShell its own extension set and settings, which the flake itself can
    declare.
 
-The choice is not written anywhere: it takes effect by opening the window, and that
-window's remote authority is what remembers it — so reopening the window, restoring it
-after a restart, or picking it out of "recently opened" all keep the same devShell. There
-is no setting that pins one, because there is nothing for a setting to pin. A project that
-wants to state which shell it means can say so in `.envrc` (`use flake .#ci`), and the
-picker offers that one first.
-
 This needs the `resolvers` proposed API — see [Requirements](#requirements).
+
+## Install
+
+The extension needs the `resolvers` proposed API, and the Marketplace cannot grant that to
+a third-party extension — so however it is installed, the editor has to be told to allow
+it. The Nix route does both in one place.
+
+### As a NixOS module (recommended)
+
+The flake exports `nixosModules.default`. It adds the extension to `programs.vscode` and
+replaces the editor package with one that launches as
+`--enable-proposed-api wiomoc.nix-develop`, so there is nothing left to switch on:
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nix-develop.url = "github:wiomoc/vscode-nix-develop";
+  };
+
+  outputs =
+    { nixpkgs, nix-develop, ... }:
+    {
+      nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = [
+          nix-develop.nixosModules.default
+          { programs.vscode.enable = true; }
+          ./configuration.nix
+        ];
+      };
+    };
+}
+```
+
+`programs.vscode.enable` stays yours to set — the module contributes only the package and
+the extension.
+
+For an editor installed some other way, `overlays.default` carries just the launch
+argument: applied to your nixpkgs it makes `pkgs.vscode` and `pkgs.vscode-fhs` start with
+the proposed API enabled. The extension on its own is `packages.${system}.default`.
+
+### From a `.vsix`
+
+1. Download `nix-develop-<version>.vsix` from
+   [Releases](https://github.com/wiomoc/vscode-nix-develop/releases).
+2. Install it, with `code --install-extension nix-develop-<version>.vsix` or from
+   *Extensions → ⋯ → Install from VSIX…*.
+3. Allow the proposed API for good, by adding the extension id to `argv.json` —
+   **Preferences: Configure Runtime Arguments** opens it, or edit `~/.vscode/argv.json`
+   directly (`~/.vscodium/argv.json` for VSCodium):
+
+   ```jsonc
+   {
+     "enable-proposed-api": ["wiomoc.nix-develop"]
+   }
+   ```
+
+4. Quit VS Code entirely and start it again — `argv.json` is only read at launch.
 
 ## Commands
 
@@ -153,7 +205,7 @@ Three ways to get a devShell into VS Code:
 | **Runtime cost, N shells** | 🟡 One Node server per devShell in active use; an idle one exits five minutes after its last window disconnects. Single shared client. | 🟢 Nothing per shell. | 🔴 A full Electron instance per shell. |
 | **VS Code version** | 🟡 Your own install, unpinned — only the server is pinned to its commit. The server build is whichever your editor declares, so VSCodium works too (via its REH builds, with Open VSX for extensions). | 🔴 Your own install, unpinned. | 🟢 The editor binary comes from `flake.lock`, and two shells may sit on different versions. |
 | **Settings, keybindings, logins** | 🟢 One profile across local and devShell windows; sign in once. | 🟢 One profile. | 🔴 One profile per devShell: separate settings and credential store, every login repeated. |
-| **Setup and upkeep** | 🟡 Needs `--enable-proposed-api nix-develop.nix-develop` in `argv.json`, and proposed APIs can break between releases. Nothing added to the repository. | 🔴 direnv, nix-direnv, the extension, a committed `.envrc` and a `direnv allow` per clone — but that same `.envrc` also serves plain shells, other editors and CI. | 🔴 An editor build per devShell, a user data directory per devShell to name, gitignore and prune, and a launch line that must never be shortened: drop `--user-data-dir` once and the folder is handed to the running instance with the wrong shell and the wrong extensions, silently. |
+| **Setup and upkeep** | 🟡 Needs `--enable-proposed-api wiomoc.nix-develop` in `argv.json`, and proposed APIs can break between releases. Nothing added to the repository. | 🔴 direnv, nix-direnv, the extension, a committed `.envrc` and a `direnv allow` per clone — but that same `.envrc` also serves plain shells, other editors and CI. | 🔴 An editor build per devShell, a user data directory per devShell to name, gitignore and prune, and a launch line that must never be shortened: drop `--user-data-dir` once and the folder is handed to the running instance with the wrong shell and the wrong extensions, silently. |
 
 ## Requirements
 
@@ -164,11 +216,11 @@ Three ways to get a devShell into VS Code:
 - The `resolvers` proposed API, which is what lets an extension resolve a remote authority:
 
   ```bash
-  code --enable-proposed-api nix-develop.nix-develop
+  code --enable-proposed-api wiomoc.nix-develop
   ```
 
   Without it there is nothing to fall back to, and the extension says so rather than
-  failing later.
+  failing later. [Install](#install) sets this up permanently, either way round.
 
 The extension does not activate in an untrusted workspace: evaluating a flake runs
 arbitrary Nix code and shell hooks from the repository.

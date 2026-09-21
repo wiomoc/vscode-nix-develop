@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [master]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -15,8 +16,11 @@ permissions:
   actions: write
 
 jobs:
+  # Branches and pull requests only: a tag is cut from a commit master already
+  # tested, so the release pipeline goes straight to building.
   test:
     name: tests (${{ matrix.os }})
+    if: github.ref_type != 'tag'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -47,3 +51,74 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
+
+  # Releases are cut by pushing a tag: `git tag v0.7.0 && git push origin v0.7.0`.
+  # The tag is the trigger and nothing here creates one, so the version that gets
+  # published is always one someone named on purpose.
+  release:
+    name: release
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # A job-level block replaces the workflow-level one rather than adding to it,
+    # so `actions: write` has to be repeated here for the cache; `contents: write`
+    # is what creates the release and uploads its asset.
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: check
+        name: Does the tag match package.json?
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          declared=$(jq -r .version package.json)
+          if [ "$version" != "$declared" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $declared"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - uses: actions/cache@v6
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: npm-${{ runner.os }}-
+
+      # The default devShell, so the .vsix is built with the node the flake pins.
+      # `vsce package` runs `vscode:prepublish`, which rebuilds the bundle.
+      - name: Build the .vsix
+        shell: nix develop --command bash --noprofile --norc -eo pipefail {0}
+        run: |
+          npm ci
+          npm run package
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          # This version's changelog section, when it has one; GitHub's generated
+          # notes otherwise, since an empty --notes-file would publish a blank body.
+          awk -v heading="## $VERSION" '
+            $0 == heading { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > notes.md
+
+          if grep -q '[^[:space:]]' notes.md; then
+            notes=(--notes-file notes.md)
+          else
+            notes=(--generate-notes)
+          fi
+
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            "${notes[@]}" \
+            "nix-develop-$VERSION.vsix"

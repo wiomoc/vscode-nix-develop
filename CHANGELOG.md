@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.4
 
 - **A Nix-supplied extension is now recorded where the server actually looks, so it loads.**
   A VS Code server does not load what it finds in its extensions directory; it loads what
