@@ -103,7 +103,6 @@
                 bashInteractive
                 nodejs_22
                 typescript-language-server
-                vsce
               ];
               EXTENSION_DEV = "1";
 
@@ -122,42 +121,42 @@
             # Declaring the editor's extensions in the flake
             # --------------------------------------------------------------------
             #
-            # Two ways to say which VS Code extensions belong to a devShell. Both are
-            # picked up when the folder is reopened with "Nix Develop: Reopen in devShell",
-            # and both are scoped to this devShell.
+            # A `vscodeExtensions` list says which VS Code extensions belong to this
+            # devShell. It is picked up when the folder is reopened with
+            # "Nix Develop: Reopen in devShell", and it is scoped to this devShell alone.
             #
-            # 1. As Nix packages, via nix-vscode-extensions (or pkgs.vscode-extensions).
-            #    These are built and pinned by the flake lock, so everyone gets the same
-            #    version and nothing is downloaded from the Marketplace at activation.
-            #    A package installs to $out/share/vscode/extensions/<publisher>.<name>,
-            #    and putting it in `packages` puts $out/share on XDG_DATA_DIRS, which is
-            #    how the extension finds it. Nothing else is required.
+            # Entries come in two forms, and may be mixed freely:
             #
-            # 2. As Marketplace IDs in a `vscodeExtensions` list. mkShell turns a Nix list
-            #    into a space-separated environment variable, so the extension reads it
-            #    straight out of the shell and installs anything missing. Unpinned, but it
-            #    needs no extra flake input.
+            # 1. A Nix package -- from `pkgs.vscode-extensions` (nixpkgs' own curated set)
+            #    or from nix-vscode-extensions (almost every Marketplace / Open VSX
+            #    extension). These are built and pinned by the flake lock, so everyone gets
+            #    the same version and nothing is downloaded from the Marketplace at
+            #    activation. mkShell stringifies a derivation to its store path, and the
+            #    package installs to $out/share/vscode/extensions/<publisher>.<name>, which
+            #    is all the extension needs to find it.
+            #
+            # 2. A Marketplace ID string. Unpinned and fetched on first use, but it needs
+            #    no extra flake input and no build.
             #
             # Prefer (1) when you want reproducibility, (2) when you want brevity.
+            #
+            # `vscodeExtensions` is the only place this is read from: an extension package
+            # in `packages` is on the shell's PATH like any other tool, and nothing else.
             editor = pkgs.mkShell {
               name = "nix-develop-editor";
 
-              packages = [
-                pkgs.bashInteractive
-                pkgs.nodejs_22
-
-                # (1) pinned by flake.lock, built by Nix
-                marketplace.jnoortheen.nix-ide
-                marketplace.tamasfe.even-better-toml
-
-                # The language server nix-ide is pointed at by `vscodeSettings` below.
-                pkgs.nil
-                pkgs.nixfmt
-                pkgs.python314
+              packages = with pkgs; [
+                bashInteractive
+                nodejs_22
+                typescript-language-server
               ];
 
-              # (2) resolved from the Marketplace on first use
               vscodeExtensions = [
+                # (1) built by Nix, pinned by flake.lock
+                marketplace.jnoortheen.nix-ide # from nix-vscode-extensions
+                pkgs.vscode-extensions.tamasfe.even-better-toml # from nixpkgs
+                pkgs.vscode-extensions.bierner.markdown-mermaid
+                # (2) resolved from the Marketplace on first use
                 "esbenp.prettier-vscode"
               ];
 
@@ -170,7 +169,6 @@
                 "nix.enableLanguageServer" = true;
                 "nix.serverPath" = "${pkgs.nil}/bin/nil";
                 "nix.formatterPath" = "${pkgs.nixfmt}/bin/nixfmt";
-                "workbench.externalBrowser" = "${pkgs.firefox}/bin/firefox";
               };
             };
           };

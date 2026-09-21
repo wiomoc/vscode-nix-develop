@@ -209,7 +209,11 @@ space-separated environment variable:
 ```nix
 devShells.default = pkgs.mkShell {
   packages = [ pkgs.rustc pkgs.cargo pkgs.rust-analyzer ];
-  vscodeExtensions = [ "rust-lang.rust-analyzer" "tamasfe.even-better-toml" ];
+
+  vscodeExtensions = [
+    pkgs.vscode-extensions.tamasfe.even-better-toml   # a Nix package
+    "rust-lang.rust-analyzer"                         # a Marketplace ID
+  ];
 };
 ```
 
@@ -246,29 +250,29 @@ yourself are left alone.
 
 ### Extensions from Nix
 
-[`nix-vscode-extensions`](https://github.com/nix-community/nix-vscode-extensions) packages
-almost every Marketplace and Open VSX extension as a Nix derivation (`pkgs.vscode-extensions`
-carries a smaller curated set). Put one in a devShell's `packages` and it is picked up
-automatically — pinned by `flake.lock`, identical for everyone, with nothing downloaded when
-the window opens:
+An entry in `vscodeExtensions` is either a Marketplace ID or a Nix package, and the two mix
+freely in one list. [`nix-vscode-extensions`](https://github.com/nix-community/nix-vscode-extensions)
+packages almost every Marketplace and Open VSX extension as a derivation; `pkgs.vscode-extensions`
+carries nixpkgs' own smaller curated set. Either is pinned by `flake.lock`, identical for
+everyone, and downloads nothing when the window opens:
 
 ```nix
 devShells.default =
   let marketplace = nix-vscode-extensions.extensions.${system}.vscode-marketplace;
   in pkgs.mkShell {
-    packages = [
-      pkgs.rustc
-      pkgs.cargo
+    packages = [ pkgs.rustc pkgs.cargo ];
+
+    vscodeExtensions = [
       marketplace.rust-lang.rust-analyzer
-      marketplace.tamasfe.even-better-toml
+      pkgs.vscode-extensions.tamasfe.even-better-toml
     ];
   };
 ```
 
-No extra convention is needed: these packages install to
-`$out/share/vscode/extensions/<publisher>.<name>`, and `nix develop` puts `$out/share` on
-`XDG_DATA_DIRS`. The extension reads the entries the devShell *added* — never the host's own
-VS Code install — and symlinks them into the server's extension directory.
+No extra convention is needed: `mkShell` stringifies a derivation to its store path — which
+is how a package is told apart from an ID — and both sources install to
+`$out/share/vscode/extensions/<publisher>.<name>`, which the extension reads and symlinks
+into the server's extension directory.
 
 Every devShell has its own extension directory, so the set matches what that shell declares:
 switching devShells drops the links the new one does not ask for, and nothing another shell
@@ -277,8 +281,7 @@ installed leaks in. Extensions installed from the Marketplace are never removed.
 Switching devShells inside a devShell window also stops the server it leaves behind, so its
 extension host does not linger with the previous shell's extensions loaded.
 
-`flake.nix` in this repository has a working `editor` devShell demonstrating both this and
-the `vscodeExtensions` ID list.
+`flake.nix` in this repository has a working `editor` devShell demonstrating both forms.
 
 ## Development
 

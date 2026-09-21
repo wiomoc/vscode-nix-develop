@@ -186,30 +186,48 @@ export async function run(): Promise<void> {
 
   await test("reads extension ids the flake declares via a list attribute", () => {
     // `mkShell { vscodeExtensions = [ "a.b" "c.d" ]; }` arrives space-separated.
-    const ids = collectExtensions({ vscodeExtensions: "rust-lang.rust-analyzer tamasfe.even-better-toml" });
+    const { ids } = collectExtensions({ vscodeExtensions: "rust-lang.rust-analyzer tamasfe.even-better-toml" });
     eq(ids, ["rust-lang.rust-analyzer", "tamasfe.even-better-toml"]);
   });
 
   await test("accepts comma separation and a pinned version", () => {
-    const ids = collectExtensions({ vscodeExtensions: "golang.go, ms-python.python@2024.1.0" });
+    const { ids } = collectExtensions({ vscodeExtensions: "golang.go, ms-python.python@2024.1.0" });
     eq(ids, ["golang.go", "ms-python.python@2024.1.0"]);
   });
 
   await test("rejects values that are not publisher.name ids", () => {
-    const ids = collectExtensions({ vscodeExtensions: "not-an-id ok.good ../../evil" });
+    const { ids } = collectExtensions({ vscodeExtensions: "not-an-id ok.good ../../evil" });
     eq(ids, ["ok.good"], "malformed entries must not reach --install-extension");
   });
 
   await test("a devShell that declares nothing wants nothing installed", () => {
-    eq(collectExtensions({}), []);
+    eq(collectExtensions({}), { ids: [], paths: [] });
   });
 
   await test("drops duplicates across the flake's extension variables", () => {
-    const ids = collectExtensions({
+    const { ids } = collectExtensions({
       vscodeExtensions: "a.b c.d",
       VSCODE_EXTENSIONS: "c.d x.y",
     });
     eq(ids, ["a.b", "c.d", "x.y"]);
+  });
+
+  await test("separates Nix packages from Marketplace ids", () => {
+    // A derivation in the list stringifies to its store path, so both forms arrive in
+    // the same variable and are told apart by shape.
+    const declared = collectExtensions({
+      vscodeExtensions:
+        "/nix/store/aaa-vscode-extension-jnoortheen-nix-ide-0.5.13 esbenp.prettier-vscode",
+    });
+    eq(declared.paths, ["/nix/store/aaa-vscode-extension-jnoortheen-nix-ide-0.5.13"]);
+    eq(declared.ids, ["esbenp.prettier-vscode"], "a store path is not an id to install");
+  });
+
+  await test("drops duplicate package paths", () => {
+    const { paths } = collectExtensions({
+      vscodeExtensions: "/nix/store/aaa-ext /nix/store/aaa-ext /nix/store/bbb-ext",
+    });
+    eq(paths, ["/nix/store/aaa-ext", "/nix/store/bbb-ext"]);
   });
 
   await test("each devShell gets its own extensions directory", () => {
@@ -586,75 +604,79 @@ export async function runNixExtensions(): Promise<void> {
   const fs = await import("node:fs/promises");
   const os = await import("node:os");
   const pathMod = await import("node:path");
-  const { collectNixExtensions, syncNixExtensions } = await import("../src/remote/extensions");
+  const { resolveNixExtensions, syncNixExtensions } = await import("../src/remote/extensions");
 
   console.log("\nnix-supplied extensions");
 
-  /** A stand-in for `$out/share` of a nix-vscode-extensions package. */
-  async function share(root: string, name: string, ids: string[]): Promise<string> {
+  /** A stand-in for the `$out` of an extension package, as either source builds it. */
+  async function pkg(root: string, name: string, ids: string[], version = "1.0.0"): Promise<string> {
     const base = pathMod.join(root, name, "share", "vscode", "extensions");
     for (const id of ids) {
       await fs.mkdir(pathMod.join(base, id), { recursive: true });
-      await fs.writeFile(pathMod.join(base, id, "package.json"), "{}");
+      const [publisher, ...rest] = id.split(".");
+      await fs.writeFile(
+        pathMod.join(base, id, "package.json"),
+        JSON.stringify({ publisher, name: rest.join("."), version }),
+      );
     }
-    return pathMod.join(root, name, "share");
+    return pathMod.join(root, name);
   }
 
   const root = await fs.mkdtemp(pathMod.join(os.tmpdir(), "nd-nixext-"));
-  const a = await share(root, "pkg-a", ["jnoortheen.nix-ide"]);
-  const b = await share(root, "pkg-b", ["tamasfe.even-better-toml"]);
-  const hostShare = await share(root, "host", ["someone.preinstalled"]);
+  const a = await pkg(root, "pkg-a", ["jnoortheen.nix-ide"], "0.5.13");
+  const b = await pkg(root, "pkg-b", ["tamasfe.even-better-toml"], "0.21.2");
 
-  await test("finds extensions the devShell added to XDG_DATA_DIRS", async () => {
-    const found = await collectNixExtensions({
-      inside: { XDG_DATA_DIRS: `${a}:${b}:${hostShare}` },
-      baseline: { XDG_DATA_DIRS: hostShare },
-    });
-    eq(
-      found.map((e) => e.id),
-      ["jnoortheen.nix-ide", "tamasfe.even-better-toml"],
-    );
+  await test("reads the extension a package supplies", async () => {
+    // `vscodeExtensions = [ pkgs.vscode-extensions.jnoortheen.nix-ide ]` arrives as $out.
+    const found = await resolveNixExtensions([a]);
+    eq(found, [
+      {
+        id: "jnoortheen.nix-ide",
+        path: pathMod.join(a, "share", "vscode", "extensions", "jnoortheen.nix-ide"),
+      },
+    ]);
   });
 
-  await test("ignores extensions that were already on the host's XDG_DATA_DIRS", async () => {
-    const found = await collectNixExtensions({
-      inside: { XDG_DATA_DIRS: hostShare },
-      baseline: { XDG_DATA_DIRS: hostShare },
-    });
-    eq(found, [], "the host's own VS Code install is not what the flake declared");
+  await test("reads several packages in declaration order", async () => {
+    const found = await resolveNixExtensions([a, b]);
+    eq(found.map((e) => e.id), ["jnoortheen.nix-ide", "tamasfe.even-better-toml"]);
+  });
+
+  await test("a package supplying several extensions yields all of them", async () => {
+    const multi = await pkg(root, "pkg-multi", ["one.first", "two.second"]);
+    const found = await resolveNixExtensions([multi]);
+    eq(found.map((e) => e.id), ["one.first", "two.second"]);
+  });
+
+  await test("the same package named twice is linked once", async () => {
+    eq((await resolveNixExtensions([a, a])).length, 1);
   });
 
   await test("skips directories without a package.json", async () => {
     const stray = pathMod.join(root, "stray", "share", "vscode", "extensions", "not-an-extension");
     await fs.mkdir(stray, { recursive: true });
-    const found = await collectNixExtensions({
-      inside: { XDG_DATA_DIRS: pathMod.join(root, "stray", "share") },
-      baseline: {},
-    });
-    eq(found, []);
+    eq(await resolveNixExtensions([pathMod.join(root, "stray")]), []);
   });
 
-  await test("tolerates XDG_DATA_DIRS entries that do not exist", async () => {
-    const found = await collectNixExtensions({
-      inside: { XDG_DATA_DIRS: `/definitely/not/here:${a}` },
-      baseline: {},
-    });
-    eq(found.map((e) => e.id), ["jnoortheen.nix-ide"]);
+  await test("skips a package that is not an extension at all", async () => {
+    // A store path in the list that holds no extension costs that entry, not the window.
+    await fs.mkdir(pathMod.join(root, "just-a-package", "bin"), { recursive: true });
+    eq(await resolveNixExtensions([pathMod.join(root, "just-a-package"), "/definitely/not/here", b]),
+      [{ id: "tamasfe.even-better-toml", path: pathMod.join(b, "share", "vscode", "extensions", "tamasfe.even-better-toml") }]);
   });
 
   console.log("\nlinking nix extensions");
 
   await test("links them into the extension directory", async () => {
     const dir = pathMod.join(root, "ext1");
-    const wanted = await collectNixExtensions({ inside: { XDG_DATA_DIRS: `${a}:${b}` }, baseline: {} });
-    const res = await syncNixExtensions(dir, wanted);
+    const res = await syncNixExtensions(dir, await resolveNixExtensions([a, b]));
     eq(res.linked, ["jnoortheen.nix-ide", "tamasfe.even-better-toml"]);
     eq((await fs.readdir(dir)).sort(), ["jnoortheen.nix-ide", "tamasfe.even-better-toml"]);
   });
 
   await test("is idempotent", async () => {
     const dir = pathMod.join(root, "ext2");
-    const wanted = await collectNixExtensions({ inside: { XDG_DATA_DIRS: a }, baseline: {} });
+    const wanted = await resolveNixExtensions([a]);
     await syncNixExtensions(dir, wanted);
     const again = await syncNixExtensions(dir, wanted);
     eq(again.linked, [], "an unchanged extension must not be relinked");
@@ -663,8 +685,8 @@ export async function runNixExtensions(): Promise<void> {
 
   await test("drops links the devShell no longer declares", async () => {
     const dir = pathMod.join(root, "ext3");
-    const both = await collectNixExtensions({ inside: { XDG_DATA_DIRS: `${a}:${b}` }, baseline: {} });
-    const justA = await collectNixExtensions({ inside: { XDG_DATA_DIRS: a }, baseline: {} });
+    const both = await resolveNixExtensions([a, b]);
+    const justA = await resolveNixExtensions([a]);
     await syncNixExtensions(dir, both);
     const res = await syncNixExtensions(dir, justA);
     eq(res.removed, ["tamasfe.even-better-toml"]);
@@ -674,14 +696,14 @@ export async function runNixExtensions(): Promise<void> {
   await test("a version bump retargets the link rather than dropping it", async () => {
     // Retargeting is safe: the extension never ends up without files.
     const dir = pathMod.join(root, "ext3c");
-    const v1 = await share(root, "pkg-v1", ["acme.tool"]);
-    const v2 = await share(root, "pkg-v2", ["acme.tool"]);
-    await syncNixExtensions(dir, await collectNixExtensions({ inside: { XDG_DATA_DIRS: v1 }, baseline: {} }));
-    const res = await syncNixExtensions(dir, await collectNixExtensions({ inside: { XDG_DATA_DIRS: v2 }, baseline: {} }));
+    const v1 = await pkg(root, "pkg-v1", ["acme.tool"]);
+    const v2 = await pkg(root, "pkg-v2", ["acme.tool"]);
+    await syncNixExtensions(dir, await resolveNixExtensions([v1]));
+    const res = await syncNixExtensions(dir, await resolveNixExtensions([v2]));
     eq(res.linked, ["acme.tool"]);
     eq(res.removed, [], "a retarget is not a removal");
     const link = await fs.readlink(pathMod.join(dir, "acme.tool"));
-    ok(link.startsWith(pathMod.join(root, "pkg-v2")), `expected the v2 path, got ${link}`);
+    ok(link.startsWith(v2), `expected the v2 path, got ${link}`);
   });
 
   await test("never removes a Marketplace-installed extension", async () => {
@@ -690,6 +712,125 @@ export async function runNixExtensions(): Promise<void> {
     const res = await syncNixExtensions(dir, []);
     eq(res.removed, [], "a real directory is not ours to delete");
     ok((await fs.readdir(dir)).includes("esbenp.prettier-vscode"), "it must still be there");
+  });
+
+
+  console.log("\nthe server's record of the directory");
+
+  const { manifestPath } = await import("../src/remote/extensions-manifest");
+
+  /** An extensions directory with a server record already in it. */
+  async function recorded(name: string, entries: unknown[]): Promise<string> {
+    const dir = pathMod.join(root, name);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(manifestPath(dir), JSON.stringify(entries));
+    return dir;
+  }
+
+  /** `extensions.json` as the server would read it back. */
+  async function record(dir: string): Promise<any[]> {
+    return JSON.parse(await fs.readFile(manifestPath(dir), "utf8"));
+  }
+
+  const galleryEntry = {
+    identifier: { id: "esbenp.prettier-vscode", uuid: "96fa4707" },
+    version: "12.4.0",
+    location: { $mid: 1, path: "/somewhere/esbenp.prettier-vscode-12.4.0", scheme: "file" },
+    relativeLocation: "esbenp.prettier-vscode-12.4.0",
+    metadata: { source: "gallery" },
+  };
+
+  await test("records a linked extension, so the server does not throw it out", async () => {
+    const dir = await recorded("rec1", [galleryEntry]);
+    await syncNixExtensions(dir, await resolveNixExtensions([a]));
+    const entry = (await record(dir)).find((e) => e.identifier.id === "jnoortheen.nix-ide");
+    eq(entry?.version, "0.5.13", "the version the package.json declares");
+    eq(entry?.relativeLocation, "jnoortheen.nix-ide", "this is what the server resolves");
+    eq(entry?.location.path, pathMod.join(dir, "jnoortheen.nix-ide"));
+  });
+
+  await test("leaves entries that are not ours alone", async () => {
+    const dir = await recorded("rec2", [galleryEntry]);
+    await syncNixExtensions(dir, await resolveNixExtensions([a]));
+    const entry = (await record(dir)).find((e) => e.identifier.id === "esbenp.prettier-vscode");
+    eq(entry, galleryEntry, "another installer's entry is not ours to rewrite");
+  });
+
+  await test("keeps the uuid and metadata an earlier install left behind", async () => {
+    // They are how the editor matches the extension against the Marketplace, and a
+    // re-record has nothing better to put there.
+    const dir = await recorded("rec3", [
+      {
+        identifier: { id: "jnoortheen.nix-ide", uuid: "0ffebccd" },
+        version: "0.4.0",
+        location: { $mid: 1, path: "/old/jnoortheen.nix-ide", scheme: "file" },
+        relativeLocation: "jnoortheen.nix-ide",
+        metadata: { publisherDisplayName: "Noortheen" },
+      },
+    ]);
+    await syncNixExtensions(dir, await resolveNixExtensions([a]));
+    const [entry] = await record(dir);
+    eq(entry.identifier.uuid, "0ffebccd");
+    eq(entry.metadata, { publisherDisplayName: "Noortheen" });
+    eq(entry.version, "0.5.13", "but the version follows the link");
+  });
+
+  await test("drops the entry for an extension it unlinks", async () => {
+    const dir = await recorded("rec4", []);
+    await syncNixExtensions(dir, await resolveNixExtensions([a, b]));
+    await syncNixExtensions(dir, await resolveNixExtensions([a]));
+    eq(
+      (await record(dir)).map((e) => e.identifier.id),
+      ["jnoortheen.nix-ide"],
+      "a record naming a directory that is gone is what we are fixing",
+    );
+  });
+
+  await test("takes a linked extension off the removal list", async () => {
+    // This is the state a devShell is left in by a start that rejected the link: marked
+    // obsolete, and so invisible even once the record names it again.
+    const dir = await recorded("rec5", []);
+    await fs.writeFile(
+      pathMod.join(dir, ".obsolete"),
+      JSON.stringify({ "jnoortheen.nix-ide-0.5.13": true, "other.ext-1.0.0": true }),
+    );
+    await syncNixExtensions(dir, await resolveNixExtensions([a]));
+    eq(JSON.parse(await fs.readFile(pathMod.join(dir, ".obsolete"), "utf8")), {
+      "other.ext-1.0.0": true,
+    });
+  });
+
+  await test("writes no record where the server has not written one", async () => {
+    // Its absence is what makes the server migrate the whole directory on its next start,
+    // which finds our links. A partial file would take that migration away.
+    const dir = pathMod.join(root, "rec6");
+    await syncNixExtensions(dir, await resolveNixExtensions([a]));
+    eq(await fs.readdir(dir), ["jnoortheen.nix-ide"], "the link, and nothing else");
+  });
+
+  await test("leaves a record it cannot read alone", async () => {
+    const dir = await recorded("rec7", []);
+    await fs.writeFile(manifestPath(dir), "{ not a list");
+    await syncNixExtensions(dir, await resolveNixExtensions([a]));
+    eq(await fs.readFile(manifestPath(dir), "utf8"), "{ not a list");
+  });
+
+  await test("leaves a record with an entry it cannot read alone", async () => {
+    // Rewriting it could drop an extension that works today; the server rejects the whole
+    // file over one bad entry, so a guess is expensive.
+    const dir = await recorded("rec8", [{ identifier: { id: "a.b" } }]);
+    await syncNixExtensions(dir, await resolveNixExtensions([a]));
+    eq(await record(dir), [{ identifier: { id: "a.b" } }]);
+  });
+
+  await test("does not rewrite a record that already says the right thing", async () => {
+    const dir = await recorded("rec9", []);
+    await syncNixExtensions(dir, await resolveNixExtensions([a]));
+    const before = await fs.stat(manifestPath(dir));
+    const text = await fs.readFile(manifestPath(dir), "utf8");
+    await syncNixExtensions(dir, await resolveNixExtensions([a]));
+    eq(await fs.readFile(manifestPath(dir), "utf8"), text);
+    eq((await fs.stat(manifestPath(dir))).mtimeMs, before.mtimeMs, "an unchanged run must not touch it");
   });
 
   await fs.rm(root, { recursive: true, force: true });

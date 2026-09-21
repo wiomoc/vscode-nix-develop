@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+- **A Nix-supplied extension is now recorded where the server actually looks, so it loads.**
+  A VS Code server does not load what it finds in its extensions directory; it loads what
+  that directory's `extensions.json` lists, and on every start it marks for removal
+  anything on disk whose `<id>-<version>` is missing from that file -- noting it in
+  `.obsolete`, which hides it from later scans too. Only two things put an
+  externally-placed directory into that record: a wholesale migration, which runs once,
+  when the record does not exist yet, and a file watcher that sees directories appear
+  *while the server runs*. We link before the server starts, because pruning is only safe
+  when the devShell has no server, so a symlink met neither.
+
+  The effect was that linking worked only for extensions that happened to be there at the
+  very first start for a devShell -- and only until their version changed, since the key
+  carries the version. Adding an extension to a devShell that already had one did nothing,
+  with no error anywhere the user would look; a version bump would have silently dropped
+  the extension the same way.
+
+  The record is now written alongside the links, and our extensions are taken off the
+  removal list. Entries already there are updated rather than replaced, so a uuid or the
+  gallery metadata an earlier install left behind survives; entries for extensions we
+  unlinked are dropped; everything else in the file belongs to another installer and is
+  left alone. A record that does not exist yet is deliberately not created, since that
+  absence is what triggers the server's own migration, which finds the links anyway.
+  Nothing is written if the file cannot be read or would come out invalid -- the server
+  rejects the whole file over one bad entry, which would cost the devShell every extension
+  it has.
+
+- **`vscodeExtensions` now takes extension packages as well as Marketplace IDs.** A
+  derivation in that list stringifies to its store path, so
+  `vscodeExtensions = [ pkgs.vscode-extensions.tamasfe.even-better-toml "esbenp.prettier-vscode" ]`
+  says both things in one place: the packages are linked out of the store, the IDs are
+  downloaded, and the two are told apart by shape -- a store path is absolute, an ID is
+  not. Either source of packages works, `pkgs.vscode-extensions` from nixpkgs itself or
+  `nix-vscode-extensions`, since both build an extension as
+  `$out/share/vscode/extensions/<publisher>.<name>`.
+
+  Extension packages in `packages` are **no longer** picked up. That worked by scanning
+  the `XDG_DATA_DIRS` entries the devShell added, which meant an extension had to be put
+  where shell *tools* go and then be recognised by where it happened to install -- the
+  editor's extension set was spread over two attributes, one of which did not say it was
+  about the editor. Move them into `vscodeExtensions`; nothing else changes, and they are
+  still linked rather than installed.
+
 - **`Select devShell` is now only offered inside a devShell window.** In a local window it
   did what `Reopen in devShell` does -- pick a folder, pick a shell, open a window against
   it -- because that is the only thing choosing a devShell locally can mean: the window's
@@ -21,8 +63,8 @@
 - **A devShell's extensions and editor settings are now declared only by the devShell.**
   Four settings are gone: `nixDevelop.remote.extensions`, `remote.extensionsFromFlake`,
   `remote.settings` and `remote.settingsFromFlake`. What a devShell needs is
-  `vscodeExtensions` and `vscodeSettings` on `mkShell`, or extension packages in
-  `packages`. The two workspace-settings equivalents were a second, weaker place to say the
+  `vscodeExtensions` and `vscodeSettings` on `mkShell`. The two workspace-settings
+  equivalents were a second, weaker place to say the
   same thing -- they could not be versioned with the shell, and, being `resource`-scoped,
   they were read from user settings only, since the resolver runs before the workspace is
   loaded; move what they held into the flake. With them gone, the two `*FromFlake` switches

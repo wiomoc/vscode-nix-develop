@@ -157,9 +157,9 @@ genuinely separate extension sets, and neither disturbs the local window. Every 
 gets its own directory, keyed by folder + devShell name, so this is simply how it works —
 there is no shared mode to opt out of.
 
-Which extensions belong to a devShell can be declared in two places.
+Which extensions belong to a devShell is declared by the devShell, in one place.
 
-### In the flake — the interesting one
+### In the flake
 
 `mkShell` turns a Nix **list attribute** into a space-separated environment variable, so a
 devShell can name its own editor extensions:
@@ -168,10 +168,10 @@ devShell can name its own editor extensions:
 devShells.default = pkgs.mkShell {
   packages = [ pkgs.rustc pkgs.cargo pkgs.rust-analyzer ];
 
-  # Becomes vscodeExtensions="rust-lang.rust-analyzer tamasfe.even-better-toml"
+  # Becomes vscodeExtensions="/nix/store/...-even-better-toml-0.21.2 rust-lang.rust-analyzer"
   vscodeExtensions = [
+    pkgs.vscode-extensions.tamasfe.even-better-toml
     "rust-lang.rust-analyzer"
-    "tamasfe.even-better-toml"
   ];
 };
 ```
@@ -181,28 +181,34 @@ the same expression. Reopening in that devShell installs them into its own exten
 directory; switching to a `devShells.docs` that declares a Markdown toolchain gets a
 different set, with no uninstalling in between.
 
-Ids are validated against `publisher.name[@version]` before they reach
-`--install-extension`, and a failed install warns rather than blocking the window.
+An entry is either a **Nix package** or a **Marketplace ID**, and the two mix freely in one
+list. They are told apart by shape: `mkShell` stringifies a derivation to its store path,
+and a store path is absolute where an ID never is. IDs are validated against
+`publisher.name[@version]` before they reach `--install-extension`, and a failed install
+warns rather than blocking the window.
 
-### From Nix — pinned and prebuilt
+### Packages — pinned and prebuilt
 
-A devShell can supply extensions as Nix packages instead of Marketplace IDs, via
-[`nix-vscode-extensions`](https://github.com/nix-community/nix-vscode-extensions) or
-`pkgs.vscode-extensions`:
+A package comes from
+[`nix-vscode-extensions`](https://github.com/nix-community/nix-vscode-extensions), which
+packages almost every Marketplace and Open VSX extension, or from `pkgs.vscode-extensions`,
+nixpkgs' own smaller curated set:
 
 ```nix
 let marketplace = nix-vscode-extensions.extensions.${system}.vscode-marketplace;
 in pkgs.mkShell {
-  packages = [ marketplace.jnoortheen.nix-ide marketplace.tamasfe.even-better-toml ];
+  vscodeExtensions = [
+    marketplace.jnoortheen.nix-ide
+    pkgs.vscode-extensions.tamasfe.even-better-toml
+  ];
 }
 ```
 
-Such a package installs to `$out/share/vscode/extensions/<publisher>.<name>`, and putting it
-in `packages` makes `$out/share` appear in `XDG_DATA_DIRS` — so discovery needs no new
-convention. Only the `XDG_DATA_DIRS` entries the devShell *added* are scanned, since the
-host's own entries may point at an existing VS Code installation that the flake did not
-declare. Each extension found is symlinked into the server's extension directory, which the
-server accepts directly and records in its own `extensions.json`.
+Both build an extension as `$out/share/vscode/extensions/<publisher>.<name>`, so reading a
+package needs no new convention: look under that prefix in the store path the list gives us
+and take what is there. Each extension found is symlinked into the server's extension
+directory, and recorded in that directory's `extensions.json`. A store path that turns out
+to hold no extension is warned about and skipped.
 
 Because they are symlinks, they cost nothing to "install" and are pinned by `flake.lock`.
 The set is re-synced whenever a server starts, and extensions the devShell no longer
@@ -211,6 +217,31 @@ the directory belongs to one devShell and a sync only runs when that devShell ha
 — nothing can be pulled out from under a live extension host. A version bump retargets the
 link rather than dropping it, so an extension is never left without files, and a real
 directory (anything installed from the Marketplace) is never removed.
+
+Only `vscodeExtensions` is read. An extension package in `packages` is an ordinary shell
+input — it lands on `PATH` and in `XDG_DATA_DIRS`, and nothing links it into the editor.
+
+#### Why the record has to be written too
+
+A server does not load what it finds in its extensions directory; it loads what that
+directory's `extensions.json` lists. On every start it scans the directory and marks for
+removal anything whose `<id>-<version>` is missing from that file, noting the removal in
+`.obsolete`, which then hides the extension from later scans as well.
+
+Two things put an externally-placed directory into the record, and a symlink of ours meets
+neither. The directory is migrated wholesale, but only when the record does not exist yet —
+the first start for a devShell. And a directory that appears *while the server runs* is
+picked up by its file watcher. We link before the server starts, because pruning is only
+safe when the devShell has no server, so neither applies.
+
+So the record is written alongside the links. Entries already there are updated rather than
+replaced, keeping a uuid or gallery metadata an earlier install left behind; entries for
+extensions we unlinked are dropped; everything else in the file belongs to another
+installer and is left alone. A record that does not exist yet is deliberately *not* created,
+since its absence is what triggers the server's own migration — which finds our links
+anyway. Nothing is written if the file cannot be read or would come out invalid: the server
+rejects the whole file over one bad entry, which would cost the devShell every extension it
+has.
 
 Switching devShells from inside a devShell window also stops the server being left behind.
 That window was its only client, and its extension host still has the previous shell's

@@ -304,19 +304,30 @@ classDiagram
     class extensions {
         <<module>>
         +FLAKE_EXTENSION_VARS: string[]
-        +collectExtensions(cfg, devShellEnv) ExtensionSources
-        +mergedExtensions(sources) string[]
+        +collectExtensions(devShellEnv) DeclaredExtensions
         +installedIn(extensionsDir) string[]
         +ensureInstalled(opts) InstallResult
         +extensionsDirFor(root, key) string
-        +collectNixExtensions(capture) NixExtension[]
+        +resolveNixExtensions(storePaths) NixExtension[]
         +syncNixExtensions(extensionsDir, wanted) SyncResult
+    }
+
+    class DeclaredExtensions {
+        <<interface>>
+        +ids: string[]
+        +paths: string[]
     }
 
     class NixExtension {
         <<interface>>
         +id: string
         +path: string
+    }
+
+    class `extensions-manifest` {
+        <<module>>
+        +manifestPath(extensionsDir) string
+        +syncManifest(extensionsDir, linked, unlinked) RecordResult
     }
 
     class settings {
@@ -434,6 +445,8 @@ classDiagram
     ServerHandle <|-- LockFile
 
     extensions ..> NixExtension
+    extensions --> `extensions-manifest`
+    extensions ..> DeclaredExtensions
     extensions ..> nix : run(launcher)
     settings ..> NixDevelopConfig
 

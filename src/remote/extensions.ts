@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { log } from "../utils/log";
 import { exists, isDirectory } from "../utils/fs-stat";
 import { run } from "../utils/run-subprocess";
+import { syncManifest } from "./extensions-manifest";
 
 /**
  * Per-devShell extension sets.
@@ -12,43 +13,64 @@ import { run } from "../utils/run-subprocess";
  * all it takes to scope a set of extensions to one devShell: two devShells in the same repo
  * get genuinely separate extension sets, and neither disturbs the local window.
  *
- * Which extensions belong to a devShell is declared by the devShell itself. `mkShell` turns
- * a Nix list attribute into a space-separated environment variable, so
+ * Which extensions belong to a devShell is declared by the devShell itself, in a
+ * `vscodeExtensions` list. `mkShell` turns a Nix list attribute into a space-separated
+ * environment variable, and a derivation in that list stringifies to its store path, so
  *
  *     pkgs.mkShell {
- *       vscodeExtensions = [ "rust-lang.rust-analyzer" "tamasfe.even-better-toml" ];
+ *       vscodeExtensions = [
+ *         pkgs.vscode-extensions.jnoortheen.nix-ide   # built by Nix
+ *         "rust-lang.rust-analyzer"                   # fetched from the Marketplace
+ *       ];
  *     }
  *
- * arrives as `vscodeExtensions="rust-lang.rust-analyzer tamasfe.even-better-toml"`. The
- * toolchain and the editor support for it are then declared and versioned in the same
- * expression, which is the whole point of putting the shell in the flake.
+ * arrives as `vscodeExtensions="/nix/store/...-nix-ide-0.5.13 rust-lang.rust-analyzer"`.
+ * The two forms are told apart by shape -- a store path is absolute, an id is not -- and
+ * handled differently: a package is already built, so it is linked, while an id has to be
+ * downloaded. The toolchain and the editor support for it are then declared and versioned
+ * in the same expression, which is the whole point of putting the shell in the flake.
  */
 export const FLAKE_EXTENSION_VARS = ["vscodeExtensions", "VSCODE_EXTENSIONS"];
 
 const EXTENSION_ID =
   /^[A-Za-z0-9][A-Za-z0-9_-]*\.[A-Za-z0-9][A-Za-z0-9_-]*(@[\w.^-]+)?$/;
 
-/** Extension ids the devShell declares, in declaration order and without duplicates. */
+/** What a devShell's extension list asks for, split by how each entry is obtained. */
+export interface DeclaredExtensions {
+  /** Marketplace ids, in declaration order and without duplicates. */
+  ids: string[];
+  /** Store paths of Nix-built extension packages, in declaration order, deduplicated. */
+  paths: string[];
+}
+
+/** What the devShell declares, in declaration order and without duplicates. */
 export function collectExtensions(
   devShellEnv: Record<string, string>,
-): string[] {
-  const found: string[] = [];
+): DeclaredExtensions {
+  const ids: string[] = [];
+  const paths: string[] = [];
   for (const name of FLAKE_EXTENSION_VARS) {
     const raw = devShellEnv[name];
     if (!raw) continue;
-    for (const id of raw.split(/[\s,]+/)) {
-      const trimmed = id.trim();
+    for (const entry of raw.split(/[\s,]+/)) {
+      const trimmed = entry.trim();
       if (!trimmed) continue;
+      // Store paths have no spaces in them, so splitting on whitespace is safe, and an
+      // absolute path is never a valid extension id -- the two cannot be confused.
+      if (path.isAbsolute(trimmed)) {
+        paths.push(trimmed);
+        continue;
+      }
       if (!EXTENSION_ID.test(trimmed)) {
         log.warn(
-          `ignoring '${trimmed}' from ${name}: not a publisher.name extension id`,
+          `ignoring '${trimmed}' from ${name}: not a publisher.name extension id or a store path`,
         );
         continue;
       }
-      found.push(trimmed);
+      ids.push(trimmed);
     }
   }
-  return [...new Set(found)];
+  return { ids: [...new Set(ids)], paths: [...new Set(paths)] };
 }
 
 /** Extension ids currently present in a server extensions directory. */
@@ -153,47 +175,36 @@ export interface NixExtension {
 /**
  * Extensions a devShell supplies through Nix rather than the Marketplace.
  *
- * `nix-vscode-extensions` (and `pkgs.vscode-extensions`) package an extension as
- * `$out/share/vscode/extensions/<publisher>.<name>`, and putting such a package in a
- * devShell's `packages` makes `$out/share` appear in `XDG_DATA_DIRS`. So the devShell can
- * pin its editor tooling in the flake, with no download at activation time and the same
- * versions for everyone.
+ * Both `pkgs.vscode-extensions` (nixpkgs' own curated set) and `nix-vscode-extensions`
+ * (almost every Marketplace / Open VSX extension) build an extension as
+ * `$out/share/vscode/extensions/<publisher>.<name>`, so a package named in
+ * `vscodeExtensions` needs no convention beyond the one they already follow: look under
+ * that prefix and take what is there. The devShell can pin its editor tooling in the
+ * flake, with no download at activation time and the same versions for everyone.
  *
- * Only the entries the devShell *added* are considered: the host's own `XDG_DATA_DIRS`
- * may point at an existing VS Code installation, which is not what the flake declared.
+ * A path that yields nothing is warned about and skipped: a package that turns out not to
+ * hold an extension should cost that entry, not the window. A duplicate id keeps the
+ * first declaration, so a package named twice is linked once.
  */
-export async function collectNixExtensions(capture: {
-  inside: Record<string, string>;
-  baseline: Record<string, string>;
-}): Promise<NixExtension[]> {
-  const inside = capture.inside.XDG_DATA_DIRS ?? "";
-  const baseline = new Set(
-    (capture.baseline.XDG_DATA_DIRS ?? "").split(":").filter(Boolean),
-  );
-  const added = inside
-    .split(":")
-    .filter((entry) => entry && !baseline.has(entry));
-
-  const found = new Map<string, string>();
-  for (const share of added) {
-    const dir = path.join(share, "vscode", "extensions");
-    let entries: string[];
-    try {
-      entries = await fsPromises.readdir(dir);
-    } catch {
-      continue;
-    }
-    for (const name of entries) {
+export async function resolveNixExtensions(
+  storePaths: string[],
+): Promise<NixExtension[]> {
+  const found = new Map<string, NixExtension>();
+  for (const storePath of storePaths) {
+    const dir = path.join(storePath, "share", "vscode", "extensions");
+    let empty = true;
+    for (const name of await fsPromises.readdir(dir).catch(() => [])) {
       const full = path.join(dir, name);
       if (!(await exists(path.join(full, "package.json")))) continue;
-      // First one wins, matching how XDG_DATA_DIRS is searched.
-      if (!found.has(name)) found.set(name, full);
+      empty = false;
+      if (!found.has(name)) found.set(name, { id: name, path: full });
     }
+    if (empty)
+      log.warn(
+        `ignoring '${storePath}' from vscodeExtensions: no VS Code extension in it`,
+      );
   }
-
-  return [...found]
-    .map(([id, p]) => ({ id, path: p }))
-    .sort((a, b) => a.id.localeCompare(b.id));
+  return [...found.values()].sort((a, b) => a.id.localeCompare(b.id));
 }
 
 /**
@@ -227,6 +238,10 @@ async function managedLink(
  * when that devShell has no server: nothing can be pulled out from under a live extension
  * host. Real directories are never touched -- those came from the Marketplace and are not
  * ours to remove.
+ *
+ * The server's own record of the directory is part of what has to match, so it is written
+ * here too: a link the record does not name is marked for removal on the next start. See
+ * `extensions-manifest.ts` for why that cannot be left to the server.
  */
 export async function syncNixExtensions(
   extensionsDir: string,
@@ -236,6 +251,8 @@ export async function syncNixExtensions(
   const byId = new Map(wanted.map((e) => [e.id, e.path]));
   const linked: string[] = [];
   const removed: string[] = [];
+  /** What the directory holds as ours once this is done -- not just what changed. */
+  const present: NixExtension[] = [];
 
   for (const name of await fsPromises.readdir(extensionsDir).catch(() => [])) {
     const entry = path.join(extensionsDir, name);
@@ -243,6 +260,7 @@ export async function syncNixExtensions(
     if (!target) continue;
     if (byId.get(name) === target) {
       byId.delete(name); // already correct
+      present.push({ id: name, path: target });
       continue;
     }
     await fsPromises.rm(entry, { force: true });
@@ -262,11 +280,17 @@ export async function syncNixExtensions(
     }
     await fsPromises.symlink(target, entry);
     linked.push(id);
+    present.push({ id, path: target });
   }
 
   if (linked.length > 0)
     log.info(`linked Nix-built extensions: ${linked.join(", ")}`);
   if (removed.length > 0)
     log.info(`unlinked extensions no longer declared: ${removed.join(", ")}`);
+
+  // Only what is actually linked is recorded: an id we refused to replace belongs to the
+  // Marketplace install still sitting there, and the record already describes that one.
+  await syncManifest(extensionsDir, present, removed);
+
   return { linked, removed };
 }

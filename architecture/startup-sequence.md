@@ -180,11 +180,13 @@ sequenceDiagram
         Note over Res: a failure here is logged, not fatal —<br/>the window opens without what the flake declared
     end
 
-    Res->>Extn: collectNixExtensions(capture)
-    Note right of Extn: XDG_DATA_DIRS entries the devShell *added*
+    Res->>Extn: collectExtensions(capture.inside)
+    Note right of Extn: 'vscodeExtensions', split into store paths and Marketplace ids
+    Res->>Extn: resolveNixExtensions(declared.paths)
     Res->>Extn: syncNixExtensions(extensionsDir, nixExtensions)
-    Res->>Extn: collectExtensions(cfg, capture.inside)
-    Res->>Extn: ensureInstalled({ launcher, extensionsDir, wanted })
+    Extn->>FS: symlinks + extensions.json + .obsolete
+    Note right of Extn: the server loads what extensions.json lists,<br/>not what the directory holds
+    Res->>Extn: ensureInstalled({ launcher, extensionsDir, wanted: declared.ids })
     Extn->>Server: <launcher> --install-extension <id> (once per missing id)
     Note right of Extn: the first thing to run the launcher, on a node<br/>that patchServerNode has already dealt with
 

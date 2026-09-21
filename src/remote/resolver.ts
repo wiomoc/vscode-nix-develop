@@ -17,9 +17,9 @@ import { offerLocalRecovery } from "./recover";
 import { decodeAuthority, storageKeyFor, type RemoteTarget } from "./authority";
 import {
   collectExtensions,
-  collectNixExtensions,
   ensureInstalled,
   extensionsDirFor,
+  resolveNixExtensions,
   syncNixExtensions,
 } from "./extensions";
 import {
@@ -331,10 +331,12 @@ export class NixDevelopResolver implements vscode.RemoteAuthorityResolver {
     target: RemoteTarget;
     progress: (m: string) => void;
   }): Promise<void> {
+    const declared = collectExtensions(opts.capture?.inside ?? {});
+
     // Extensions the devShell supplies as Nix packages are already built: they only need
     // linking into the extension directory, with no download and no version drift.
     if (opts.capture) {
-      const nixExtensions = await collectNixExtensions(opts.capture);
+      const nixExtensions = await resolveNixExtensions(declared.paths);
       if (nixExtensions.length > 0) {
         opts.progress(
           `Linking ${nixExtensions.length} Nix-built extension(s)\u2026`,
@@ -343,6 +345,7 @@ export class NixDevelopResolver implements vscode.RemoteAuthorityResolver {
           `devShell supplies via Nix: ${nixExtensions.map((e) => e.id).join(", ")}`,
         );
       }
+      // Runs even when the set is empty: that is what unlinks what the flake dropped.
       await syncNixExtensions(opts.extensionsDir, nixExtensions).catch((err) =>
         log.warn(
           `could not link Nix-built extensions: ${(err as Error).message}`,
@@ -350,7 +353,7 @@ export class NixDevelopResolver implements vscode.RemoteAuthorityResolver {
       );
     }
 
-    const wanted = collectExtensions(opts.capture?.inside ?? {});
+    const wanted = declared.ids;
     if (wanted.length === 0) return;
 
     log.info(`devShell extensions -- from flake: [${wanted.join(", ")}]`);

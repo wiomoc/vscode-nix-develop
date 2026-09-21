@@ -157,7 +157,7 @@ export async function showRemoteExtensions(
     ...(installed.length ? installed.map((i) => `  ${i}`) : ["  (none)"]),
     "",
     `## Supplied by the flake`,
-    "  reading 'vscodeExtensions' and Nix-built extensions from the devShell",
+    "  reading 'vscodeExtensions' from the devShell",
     ...(nixLinked.length ? nixLinked.map((i) => `  ${i}  (built by Nix)`) : []),
     "",
     `## Settings applied to this devShell`,
