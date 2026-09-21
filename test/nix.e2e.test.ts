@@ -1,10 +1,12 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { computeDelta } from "../src/environment";
+import type { EnvDelta } from "../src/environment";
 import type { NixDevelopConfig } from "../src/config";
+import type { CaptureResult } from "../src/nix";
 import { captureEnv, currentSystem, listDevShells, toInstallable } from "../src/nix";
-import { eq, ok, test } from "./harness";
 import * as stub from "./activation-stub";
 import { forgetPty } from "../src/utils/pty";
 
@@ -48,119 +50,129 @@ const FLAKE = `{
 `;
 
 /**
- * Exercises the real `nix` CLI. Skipped unless NIX_DEVELOP_E2E=1, because it needs a
- * network-capable Nix and takes minutes on a cold store.
+ * Exercises the real `nix` CLI, which needs a network-capable Nix and takes minutes on a
+ * cold store -- hence the `e2e` tag, which is what keeps it out of a plain `npm test`.
+ *
+ * The build itself happens once, in `beforeAll`: it is minutes of work, and everything
+ * below is a question about the same captured environment.
  */
-export async function run(): Promise<void> {
-  if (process.env.NIX_DEVELOP_E2E !== "1") {
-    console.log("\nnix (end-to-end)  [skipped: set NIX_DEVELOP_E2E=1 to run]");
-    return;
-  }
-  console.log("\nnix (end-to-end)");
-
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "nix-develop-e2e-"));
-  const system = await currentSystem(cfg, dir);
-  await fs.writeFile(path.join(dir, "flake.nix"), FLAKE.replace("@SYSTEM@", system));
-
-  await test(`resolves the current system (${system})`, () => {
-    ok(/^[a-z0-9_]+-[a-z]+$/.test(system), `unexpected system double: ${system}`);
-  });
-
-  await test("discovers every devShell in the flake", async () => {
-    const shells = await listDevShells(cfg, dir, system);
-    eq(
-      shells.map((s) => s.name).sort(),
-      ["ci", "default"],
-    );
-  });
-
-  const installable = toInstallable("default", dir, system);
+describe("nix (end-to-end)", { tags: ["e2e"] }, () => {
+  let dir: string;
+  let system: string;
+  let installable: string;
+  let capture: CaptureResult;
+  let delta: EnvDelta;
   const streamed: string[] = [];
   const progressed: string[] = [];
-  const capture = await captureEnv(cfg, installable, dir, path.join(dir, ".profile", "devshell"), {
-    onOutput: (chunk) => streamed.push(chunk),
-    onProgress: (line) => progressed.push(line),
-  });
-  const delta = computeDelta(capture);
 
-  await test("the build is streamed as it happens, not collected at the end", () => {
-    ok(streamed.length > 0, "nothing reached the terminal sink");
+  beforeAll(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "nix-develop-e2e-"));
+    system = await currentSystem(cfg, dir);
+    await fs.writeFile(path.join(dir, "flake.nix"), FLAKE.replace("@SYSTEM@", system));
+
+    installable = toInstallable("default", dir, system);
+    capture = await captureEnv(cfg, installable, dir, path.join(dir, ".profile", "devshell"), {
+      onOutput: (chunk) => streamed.push(chunk),
+      onProgress: (line) => progressed.push(line),
+    });
+    delta = computeDelta(capture);
+  });
+
+  afterAll(async () => {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  });
+
+  it("resolves the current system", () => {
+    expect(/^[a-z0-9_]+-[a-z]+$/.test(system), `unexpected system double: ${system}`).toBe(true);
+  });
+
+  it("discovers every devShell in the flake", async () => {
+    const shells = await listDevShells(cfg, dir, system);
+    expect(shells.map((s) => s.name).sort()).toEqual(["ci", "default"]);
+  });
+
+  it("the build is streamed as it happens, not collected at the end", () => {
+    expect(streamed.length > 0, "nothing reached the terminal sink").toBe(true);
     // `--log-format bar-with-logs` is what puts the builders' own output here; without it
     // Nix says almost nothing over a pipe, and a failing shellHook would be invisible.
-    ok(
-      streamed.join("").includes("a noisy banner on stdout"),
-      `the shellHook's own output should stream too, got: ${streamed.join("").slice(0, 400)}`,
-    );
+    expect(
+      streamed.join(""),
+      "the shellHook's own output should stream too",
+    ).toContain("a noisy banner on stdout");
   });
 
   // The same build again, this time with a terminal to write to. Everything Nix withholds
   // over a pipe -- colour, and the progress bar it redraws in place -- depends on this and
   // on nothing else, so it is worth proving against the real CLI rather than assuming.
+  // `NIX_DEVELOP_APP_ROOT` is an installed VS Code's `resources/app`, which is where the
+  // pty comes from; without one these report themselves as skipped.
   const appRoot = process.env.NIX_DEVELOP_APP_ROOT;
-  if (!appRoot) {
-    console.log("  [tty path skipped: set NIX_DEVELOP_APP_ROOT to an editor's resources/app]");
-  } else {
-    forgetPty();
-    const previousAppRoot = stub.env.appRoot;
-    stub.env.appRoot = appRoot;
+
+  describe.skipIf(appRoot === undefined)("given a terminal", () => {
     const coloured: string[] = [];
-    await captureEnv(cfg, installable, dir, path.join(dir, ".profile", "devshell"), {
-      onOutput: (chunk) => coloured.push(chunk),
-      tty: { columns: 100, rows: 30 },
-    });
-    stub.env.appRoot = previousAppRoot;
-    forgetPty();
 
-    await test("given a terminal, Nix colours its output and draws its bar", () => {
+    beforeAll(async () => {
+      forgetPty();
+      const previousAppRoot = stub.env.appRoot;
+      stub.env.appRoot = appRoot;
+      await captureEnv(cfg, installable, dir, path.join(dir, ".profile", "devshell"), {
+        onOutput: (chunk) => coloured.push(chunk),
+        tty: { columns: 100, rows: 30 },
+      });
+      stub.env.appRoot = previousAppRoot;
+      forgetPty();
+    });
+
+    it("Nix colours its output and draws its bar", () => {
       const text = coloured.join("");
-      ok(text.includes("\u001b["), "no escape codes: Nix still thinks it is writing to a pipe");
-      ok(text.includes("\r"), "the progress bar redraws with carriage returns");
+      expect(text, "no escape codes: Nix still thinks it is writing to a pipe").toContain("\u001b[");
+      expect(text, "the progress bar redraws with carriage returns").toContain("\r");
     });
 
-    await test("the pipe path really was the plain one", () => {
-      eq(
+    it("the pipe path really was the plain one", () => {
+      expect(
         streamed.join("").includes("\u001b["),
-        false,
         "the earlier capture had no terminal, so it should have had no colour",
-      );
+      ).toBe(false);
     });
-  }
+  });
 
-  await test("the notification sink sees plain text, never escape codes", () => {
+  it("the notification sink sees plain text, never escape codes", () => {
     const escaped = progressed.filter((l) => l.includes("\u001b"));
-    eq(escaped, [], "a progress notification would print these literally");
+    expect(escaped, "a progress notification would print these literally").toEqual([]);
   });
 
-  await test("shellHook side effects are captured", () => {
-    eq(delta.replace.get("FROM_HOOK"), "1", "the shellHook must have been executed");
+  it("shellHook side effects are captured", () => {
+    expect(delta.replace.get("FROM_HOOK"), "the shellHook must have been executed").toEqual("1");
   });
 
-  await test("mkShell attributes become environment variables", () => {
-    eq(delta.replace.get("MY_VAR"), "hello-world");
+  it("mkShell attributes become environment variables", () => {
+    expect(delta.replace.get("MY_VAR")).toEqual("hello-world");
   });
 
-  await test("shellHook stdout does not leak into the captured environment", () => {
+  it("shellHook stdout does not leak into the captured environment", () => {
     const polluted = [...delta.replace.keys()].filter((k) => k.includes("noisy") || k.includes("banner"));
-    eq(polluted, [], "banner text must not be parsed as variables");
+    expect(polluted, "banner text must not be parsed as variables").toEqual([]);
   });
 
-  await test("packages land on PATH as a prepended prefix", () => {
+  it("packages land on PATH as a prepended prefix", () => {
     const prefix = delta.prepend.get("PATH");
-    ok(!!prefix, "PATH should be a prepend, not a replace");
-    ok(prefix!.includes("hello"), `hello should be on PATH, got: ${prefix}`);
-    ok(!prefix!.includes(capture.baseline.PATH!), "the host PATH must not be duplicated into the prefix");
+    expect(prefix, "PATH should be a prepend, not a replace").toBeTruthy();
+    expect(prefix, "hello should be on PATH").toContain("hello");
+    expect(
+      prefix!.includes(capture.baseline.PATH!),
+      "the host PATH must not be duplicated into the prefix",
+    ).toBe(false);
   });
 
-  await test("build-time HOME and TMPDIR never reach the result", () => {
-    ok(!delta.replace.has("HOME"), "HOME must not be overridden");
-    ok(!delta.replace.has("TMPDIR"), "the scratch TMPDIR must not be exported");
-    ok(!delta.replace.has("out"), "derivation outputs must not be exported");
+  it("build-time HOME and TMPDIR never reach the result", () => {
+    expect(delta.replace.has("HOME"), "HOME must not be overridden").toBe(false);
+    expect(delta.replace.has("TMPDIR"), "the scratch TMPDIR must not be exported").toBe(false);
+    expect(delta.replace.has("out"), "derivation outputs must not be exported").toBe(false);
   });
 
-  await test("the profile is created as a GC root", async () => {
+  it("the profile is created as a GC root", async () => {
     const link = await fs.readlink(path.join(dir, ".profile", "devshell"));
-    ok(link.length > 0, "profile symlink should exist");
+    expect(link.length > 0, "profile symlink should exist").toBe(true);
   });
-
-  await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
-}
+});

@@ -1,7 +1,10 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { eq, ok, test } from "./harness";
+import * as stub from "./activation-stub";
+import { DevShellSession, FLAKE_DEBOUNCE_MS } from "../src/session";
+import { StatusBar } from "../src/ui";
+import { afterAll, describe, expect, it } from "vitest";
 
 /**
  * The flake watcher, driven through the fake editor.
@@ -10,113 +13,109 @@ import { eq, ok, test } from "./harness";
  * decides the event was not for it, and nothing anywhere says so. Firing the events by
  * hand is the only way to see whether the handler actually runs.
  */
-export async function run(): Promise<void> {
-  console.log("\nflake watcher");
 
-  const stub = await import("./activation-stub");
-  const { DevShellSession, FLAKE_DEBOUNCE_MS } = await import("../src/session");
-  const { StatusBar } = await import("../src/ui");
+const root = await fs.mkdtemp(path.join(os.tmpdir(), "nd-watch-"));
+const flake = path.join(root, "flake.nix");
+await fs.writeFile(flake, "{ outputs = _: {}; }\n");
 
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "nd-watch-"));
-  const flake = path.join(root, "flake.nix");
-  await fs.writeFile(flake, "{ outputs = _: {}; }\n");
+const context = {
+  subscriptions: [],
+  globalState: { get: () => undefined, update: async () => undefined },
+};
+const folder = { uri: stub.Uri.file(root), name: "watched", index: 0 };
 
-  const context = {
-    subscriptions: [],
-    globalState: { get: () => undefined, update: async () => undefined },
-  };
-  const folder = { uri: stub.Uri.file(root), name: "watched", index: 0 };
+let notified = 0;
+const onFlakeChanged = async () => {
+  notified++;
+};
 
-  let notified = 0;
-  const onFlakeChanged = async () => {
-    notified++;
-  };
+stub.recorded.watchers.length = 0;
+const session = new DevShellSession(
+  context as never,
+  folder as never,
+  new StatusBar(),
+  onFlakeChanged,
+);
+const watcher = stub.recorded.watchers.at(-1)!;
 
-  stub.recorded.watchers.length = 0;
-  const session = new DevShellSession(
-    context as never,
-    folder as never,
-    new StatusBar(),
-    onFlakeChanged,
-  );
-  const watcher = stub.recorded.watchers.at(-1)!;
+/** Give the debounce room to fire, then let its async handler settle. */
+const settle = async () => {
+  await new Promise((r) => setTimeout(r, FLAKE_DEBOUNCE_MS + 150));
+};
 
-  /** Give the debounce room to fire, then let its async handler settle. */
-  const settle = async () => {
-    await new Promise((r) => setTimeout(r, FLAKE_DEBOUNCE_MS + 150));
-  };
-
-  await test("the session subscribes to create, change and delete", () => {
-    ok(watcher !== undefined, "no file system watcher was created");
-    eq(
+describe("flake watcher", () => {
+  it("the session subscribes to create, change and delete", () => {
+    expect(watcher !== undefined, "no file system watcher was created").toBe(true);
+    expect(
       [watcher.changed.count(), watcher.created.count(), watcher.deleted.count()],
-      [1, 1, 1],
       "a deleted flake.nix is a change too, so all three have to be handled",
-    );
+    ).toEqual([1, 1, 1]);
   });
 
-  await test("a write to flake.nix reaches the host", async () => {
+  it("a write to flake.nix reaches the host", async () => {
     notified = 0;
     watcher.changed.fire({ fsPath: flake });
     await settle();
-    eq(notified, 1, "the host was never told the flake changed");
+    expect(notified, "the host was never told the flake changed").toEqual(1);
   });
 
-  await test("a burst of events is one notification", async () => {
+  it("a burst of events is one notification", async () => {
     notified = 0;
     watcher.changed.fire({ fsPath: flake });
     watcher.changed.fire({ fsPath: path.join(root, "flake.lock") });
     watcher.changed.fire({ fsPath: flake });
     await settle();
-    eq(notified, 1, "`nix flake update` should not notify once per write");
+    expect(notified, "`nix flake update` should not notify once per write").toEqual(1);
   });
 
-  await test("a flake in another directory is ignored", async () => {
+  it("a flake in another directory is ignored", async () => {
     notified = 0;
     const nested = path.join(root, "vendor", "flake.nix");
     await fs.mkdir(path.dirname(nested), { recursive: true });
     watcher.changed.fire({ fsPath: nested });
     await settle();
-    eq(notified, 0, "only the configured flake directory belongs to this session");
+    expect(notified, "only the configured flake directory belongs to this session").toEqual(0);
   });
 
-  await test("deleting flake.nix is noticed", async () => {
+  it("deleting flake.nix is noticed", async () => {
     notified = 0;
     await fs.rm(flake);
     watcher.deleted.fire({ fsPath: flake });
     await settle();
-    eq(notified, 1, "the host was never told the flake went away");
-    eq(session.hasFlake(), false);
+    expect(notified, "the host was never told the flake went away").toEqual(1);
+    expect(session.hasFlake()).toEqual(false);
   });
 
-  await test("a flake appearing offers the picker", async () => {
+  it("a flake appearing offers the picker", async () => {
     notified = 0;
     stub.recorded.infoMessages.length = 0;
     await fs.writeFile(flake, "{ outputs = _: {}; }\n");
     watcher.created.fire({ fsPath: flake });
     await settle();
-    eq(notified, 1, "the host was never told the flake appeared");
-    ok(
+    expect(notified, "the host was never told the flake appeared").toEqual(1);
+    expect(
       stub.recorded.infoMessages.some((m) => m.includes("flake.nix")),
       "a flake appearing in a watched folder should offer the devShell picker",
-    );
+    ).toBe(true);
   });
 
-  await test("editing an existing flake does not nag", async () => {
+  it("editing an existing flake does not nag", async () => {
     stub.recorded.infoMessages.length = 0;
     watcher.changed.fire({ fsPath: flake });
     await settle();
-    eq(stub.recorded.infoMessages, [], "editing a flake should not pop a notification");
+    expect(stub.recorded.infoMessages, "editing a flake should not pop a notification").toEqual([]);
   });
 
-  await test("disposing stops the handlers", async () => {
+  it("disposing stops the handlers", async () => {
     notified = 0;
     session.dispose();
     watcher.changed.fire({ fsPath: flake });
     await settle();
-    eq(notified, 0, "a disposed session must not keep reacting");
-    ok(watcher.disposed, "the watcher itself should be disposed with the session");
+    expect(notified, "a disposed session must not keep reacting").toEqual(0);
+    expect(watcher.disposed, "the watcher itself should be disposed with the session").toBe(true);
   });
 
-  await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
-}
+  afterAll(async () => {
+    await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
+  });
+});

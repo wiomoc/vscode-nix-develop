@@ -3,8 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { nixErrorLocations } from "../src/nix";
 import { errorSite, offerLocalRecovery, openPendingFile } from "../src/remote/recover";
-import { eq, ok, test } from "./harness";
 import { answers, recorded, workspace, Uri } from "./activation-stub";
+import { afterAll, describe, expect, it } from "vitest";
 
 /**
  * A context whose `globalState` actually stores things, because the handover between the
@@ -24,41 +24,37 @@ function fakeContext(): {
   };
 }
 
-export async function run(): Promise<void> {
-  console.log("\nrecovering from a flake that does not evaluate");
+const dir = await fs.mkdtemp(path.join(os.tmpdir(), "nd-recover-"));
+await fs.writeFile(path.join(dir, "flake.nix"), "{ }\n");
+await fs.mkdir(path.join(dir, "nix"), { recursive: true });
+await fs.writeFile(path.join(dir, "nix", "shell.nix"), "{ }\n");
 
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "nd-recover-"));
-  await fs.writeFile(path.join(dir, "flake.nix"), "{ }\n");
-  await fs.mkdir(path.join(dir, "nix"), { recursive: true });
-  await fs.writeFile(path.join(dir, "nix", "shell.nix"), "{ }\n");
-
-  await test("reads the position out of what Nix printed", () => {
-    eq(
+describe("recovering from a flake that does not evaluate", () => {
+  it("reads the position out of what Nix printed", () => {
+    expect(
       nixErrorLocations({
         stderr:
           "error: syntax error, unexpected end of file, expecting '}'\n" +
           "       at /w/proj/flake.nix:12:1:",
       }),
-      [{ file: "/w/proj/flake.nix", line: 12, column: 1 }],
-    );
+    ).toEqual([{ file: "/w/proj/flake.nix", line: 12, column: 1 }]);
   });
 
-  await test("reads it through the escape codes of the pty path too", () => {
-    eq(
+  it("reads it through the escape codes of the pty path too", () => {
+    expect(
       nixErrorLocations({
         stderr:
           "\u001b[31;1merror:\u001b[0m undefined variable 'mkShel'\r\n" +
           "       \u001b[34;1mat \u001b[0m/w/proj/flake.nix:7:5:\r\n",
       }),
-      [{ file: "/w/proj/flake.nix", line: 7, column: 5 }],
-    );
+    ).toEqual([{ file: "/w/proj/flake.nix", line: 7, column: 5 }]);
   });
 
-  await test("a failure that names no position yields none", () => {
-    eq(nixErrorLocations({ stderr: "error: could not find a flake.nix file" }), []);
+  it("a failure that names no position yields none", () => {
+    expect(nixErrorLocations({ stderr: "error: could not find a flake.nix file" })).toEqual([]);
   });
 
-  await test("opens the innermost frame that is actually in the checkout", async () => {
+  it("opens the innermost frame that is actually in the checkout", async () => {
     const site = await errorSite(
       [
         { file: path.join(dir, "flake.nix"), line: 3, column: 5 },
@@ -66,10 +62,10 @@ export async function run(): Promise<void> {
       ],
       dir,
     );
-    eq(site, { file: path.join(dir, "nix", "shell.nix"), line: 9, column: 2 });
+    expect(site).toEqual({ file: path.join(dir, "nix", "shell.nix"), line: 9, column: 2 });
   });
 
-  await test("skips frames inside nixpkgs, which the user cannot fix", async () => {
+  it("skips frames inside nixpkgs, which the user cannot fix", async () => {
     const site = await errorSite(
       [
         { file: path.join(dir, "flake.nix"), line: 3, column: 5 },
@@ -77,32 +73,31 @@ export async function run(): Promise<void> {
       ],
       dir,
     );
-    eq(
+    expect(
       site,
-      { file: path.join(dir, "flake.nix"), line: 3, column: 5 },
       "a store path with no counterpart in the checkout is not somewhere to send anyone",
-    );
+    ).toEqual({ file: path.join(dir, "flake.nix"), line: 3, column: 5 });
   });
 
-  await test("maps the store copy of the flake back onto the checkout", async () => {
+  it("maps the store copy of the flake back onto the checkout", async () => {
     const site = await errorSite(
       [{ file: "/nix/store/bbbb-source/nix/shell.nix", line: 4, column: 7 }],
       dir,
     );
-    eq(site, { file: path.join(dir, "nix", "shell.nix"), line: 4, column: 7 });
+    expect(site).toEqual({ file: path.join(dir, "nix", "shell.nix"), line: 4, column: 7 });
   });
 
-  await test("falls back to flake.nix when Nix named no position", async () => {
-    eq(await errorSite([], dir), { file: path.join(dir, "flake.nix"), line: 1, column: 1 });
+  it("falls back to flake.nix when Nix named no position", async () => {
+    expect(await errorSite([], dir)).toEqual({ file: path.join(dir, "flake.nix"), line: 1, column: 1 });
   });
 
-  await test("offers nothing to open when there is no flake.nix at all", async () => {
+  it("offers nothing to open when there is no flake.nix at all", async () => {
     const empty = await fs.mkdtemp(path.join(os.tmpdir(), "nd-recover-empty-"));
-    eq(await errorSite([], empty), undefined);
+    expect(await errorSite([], empty)).toEqual(undefined);
     await fs.rm(empty, { recursive: true, force: true });
   });
 
-  await test("the offer reopens locally and leaves the file for the next window", async () => {
+  it("the offer reopens locally and leaves the file for the next window", async () => {
     const context = fakeContext();
     recorded.errorMessages.length = 0;
     recorded.executed.length = 0;
@@ -115,21 +110,21 @@ export async function run(): Promise<void> {
       "error: syntax error, unexpected end of file",
     );
 
-    eq(recorded.errorMessages[0]?.items[0], "Reopen Locally and Edit flake.nix");
-    ok(
+    expect(recorded.errorMessages[0]?.items[0]).toEqual("Reopen Locally and Edit flake.nix");
+    expect(
       recorded.errorMessages[0]?.modal === true,
       "the window cannot open at all, so the offer is not something to miss in a corner",
-    );
-    ok(
+    ).toBe(true);
+    expect(
       recorded.executed.includes("vscode.openFolder"),
       "the offer's whole point is getting back to a window that can show the file",
-    );
+    ).toBe(true);
     const pending = context.globalState.get() as { file: string; line: number };
-    eq(pending.file, path.join(dir, "flake.nix"));
-    eq(pending.line, 12);
+    expect(pending.file).toEqual(path.join(dir, "flake.nix"));
+    expect(pending.line).toEqual(12);
   });
 
-  await test("dismissing the offer leaves the window where it is", async () => {
+  it("dismissing the offer leaves the window where it is", async () => {
     const context = fakeContext();
     recorded.executed.length = 0;
     answers.errorMessage = () => undefined;
@@ -141,14 +136,14 @@ export async function run(): Promise<void> {
       "error: undefined variable 'mkShel'",
     );
 
-    ok(
+    expect(
       !recorded.executed.includes("vscode.openFolder"),
       "nothing was chosen, so nothing happens",
-    );
-    eq(context.globalState.get(), undefined);
+    ).toBe(true);
+    expect(context.globalState.get()).toEqual(undefined);
   });
 
-  await test("the local window opens the file, at the line that failed", async () => {
+  it("the local window opens the file, at the line that failed", async () => {
     const context = fakeContext();
     answers.errorMessage = (_m, items) => items[0];
     await offerLocalRecovery(
@@ -160,20 +155,19 @@ export async function run(): Promise<void> {
 
     recorded.shownDocuments.length = 0;
     workspace.workspaceFolders = [{ uri: Uri.file(dir) }];
-    ok(await openPendingFile(context as never), "the pending open is this window's to act on");
+    expect(await openPendingFile(context as never), "the pending open is this window's to act on").toBe(true);
 
     const shown = recorded.shownDocuments[0]?.options as {
       selection: { start: { line: number; character: number } };
     };
-    eq(
-      shown.selection.start,
-      { line: 11, character: 2 },
-      "Nix counts from one, VS Code from zero",
-    );
-    eq(await openPendingFile(context as never), false, "and it is consumed, not repeated");
+    expect(shown.selection.start, "Nix counts from one, VS Code from zero").toEqual({
+      line: 11,
+      character: 2,
+    });
+    expect(await openPendingFile(context as never), "and it is consumed, not repeated").toEqual(false);
   });
 
-  await test("a request for another folder is dropped rather than opened here", async () => {
+  it("a request for another folder is dropped rather than opened here", async () => {
     const context = fakeContext();
     answers.errorMessage = (_m, items) => items[0];
     await offerLocalRecovery(
@@ -185,11 +179,13 @@ export async function run(): Promise<void> {
 
     recorded.shownDocuments.length = 0;
     workspace.workspaceFolders = [{ uri: Uri.file(path.join(os.tmpdir(), "nd-elsewhere")) }];
-    eq(await openPendingFile(context as never), false);
-    eq(recorded.shownDocuments.length, 0);
+    expect(await openPendingFile(context as never)).toEqual(false);
+    expect(recorded.shownDocuments.length).toEqual(0);
   });
 
-  answers.errorMessage = undefined;
-  workspace.workspaceFolders = undefined;
-  await fs.rm(dir, { recursive: true, force: true });
-}
+  afterAll(async () => {
+    answers.errorMessage = undefined;
+    workspace.workspaceFolders = undefined;
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+});

@@ -96,82 +96,109 @@
                 platforms = pkgs.lib.platforms.all;
               };
             };
-          devShells = {
-            default = pkgs.mkShell {
-              name = "nix-develop-extension";
-              packages = with pkgs; [
-                bashInteractive
-                nodejs_22
-                typescript-language-server
-              ];
-              EXTENSION_DEV = "1";
+          devShells =
+            let
+              NIX_DEVELOP_APP_ROOT =
+                if pkgs.stdenv.hostPlatform.isDarwin then
+                  "${pkgs.vscodium}/Applications/VSCodium.app/Contents/Resources/app"
+                else
+                  "${pkgs.vscodium}/lib/vscode/resources/app";
+            in
+            {
+              default = pkgs.mkShell {
+                name = "nix-develop-extension";
+                packages = with pkgs; [
+                  bashInteractive
+                  nodejs_22
+                  typescript-language-server
+                ];
+                EXTENSION_DEV = "1";
 
-              shellHook = ''
-                echo "nix-develop extension dev shell -- npm install && npm run build"
-              '';
-            };
+                shellHook = ''
+                  echo "nix-develop extension dev shell -- npm install && npm run build"
+                '';
+              };
 
-            # A deliberately minimal shell, handy for exercising the picker.
-            ci = pkgs.mkShell {
-              name = "nix-develop-ci";
-              packages = [ pkgs.nodejs_22 ];
-            };
+              # What CI runs in, and a small shell for exercising the picker.
+              #
+              # The editor is here for `test/pty.test.ts`: this extension borrows the
+              # editor's `node-pty` rather than depending on one, and that test only
+              # exercises the borrowing when `NIX_DEVELOP_APP_ROOT` points it at an
+              # installed editor's `resources/app`. Without it the test skips.
+              #
+              # VSCodium rather than VS Code, for two reasons. It is free, so nothing
+              # here needs `allowUnfree`. And VS Code moved `node_modules` into
+              # `node_modules.asar` in 1.129 -- `node-pty`'s `lib/index.js` lives inside
+              # the archive, readable only through Electron's asar-aware `fs` -- while
+              # VSCodium is still on 1.126, which lays it out as plain files. The tests
+              # run under plain node, so only the latter is loadable.
+              ci = pkgs.mkShell {
+                name = "nix-develop-ci";
+                packages = [
+                  pkgs.nodejs_22
+                  pkgs.vscodium
+                ];
 
-            # --------------------------------------------------------------------
-            # Declaring the editor's extensions in the flake
-            # --------------------------------------------------------------------
-            #
-            # A `vscodeExtensions` list says which VS Code extensions belong to this
-            # devShell. It is picked up when the folder is reopened with
-            # "Nix Develop: Reopen in devShell", and it is scoped to this devShell alone.
-            #
-            # Entries come in two forms, and may be mixed freely:
-            #
-            # 1. A Nix package -- from `pkgs.vscode-extensions` (nixpkgs' own curated set)
-            #    or from nix-vscode-extensions (almost every Marketplace / Open VSX
-            #    extension). These are built and pinned by the flake lock, so everyone gets
-            #    the same version and nothing is downloaded from the Marketplace at
-            #    activation. mkShell stringifies a derivation to its store path, and the
-            #    package installs to $out/share/vscode/extensions/<publisher>.<name>, which
-            #    is all the extension needs to find it.
-            #
-            # 2. A Marketplace ID string. Unpinned and fetched on first use, but it needs
-            #    no extra flake input and no build.
-            #
-            # Prefer (1) when you want reproducibility, (2) when you want brevity.
-            #
-            # `vscodeExtensions` is the only place this is read from: an extension package
-            # in `packages` is on the shell's PATH like any other tool, and nothing else.
-            editor = pkgs.mkShell {
-              name = "nix-develop-editor";
+                inherit NIX_DEVELOP_APP_ROOT;
+              };
 
-              packages = with pkgs; [
-                bashInteractive
-                nodejs_22
-                typescript-language-server
-              ];
+              # --------------------------------------------------------------------
+              # Declaring the editor's extensions in the flake
+              # --------------------------------------------------------------------
+              #
+              # A `vscodeExtensions` list says which VS Code extensions belong to this
+              # devShell. It is picked up when the folder is reopened with
+              # "Nix Develop: Reopen in devShell", and it is scoped to this devShell alone.
+              #
+              # Entries come in two forms, and may be mixed freely:
+              #
+              # 1. A Nix package -- from `pkgs.vscode-extensions` (nixpkgs' own curated set)
+              #    or from nix-vscode-extensions (almost every Marketplace / Open VSX
+              #    extension). These are built and pinned by the flake lock, so everyone gets
+              #    the same version and nothing is downloaded from the Marketplace at
+              #    activation. mkShell stringifies a derivation to its store path, and the
+              #    package installs to $out/share/vscode/extensions/<publisher>.<name>, which
+              #    is all the extension needs to find it.
+              #
+              # 2. A Marketplace ID string. Unpinned and fetched on first use, but it needs
+              #    no extra flake input and no build.
+              #
+              # Prefer (1) when you want reproducibility, (2) when you want brevity.
+              #
+              # `vscodeExtensions` is the only place this is read from: an extension package
+              # in `packages` is on the shell's PATH like any other tool, and nothing else.
+              editor = pkgs.mkShell {
+                name = "nix-develop-editor";
 
-              vscodeExtensions = [
-                # (1) built by Nix, pinned by flake.lock
-                marketplace.jnoortheen.nix-ide # from nix-vscode-extensions
-                pkgs.vscode-extensions.tamasfe.even-better-toml # from nixpkgs
-                pkgs.vscode-extensions.bierner.markdown-mermaid
-                # (2) resolved from the Marketplace on first use
-                "esbenp.prettier-vscode"
-              ];
+                packages = with pkgs; [
+                  bashInteractive
+                  nodejs_22
+                  typescript-language-server
+                ];
 
-              # Settings for the devShell's window, in the same spirit: the shell knows
-              # where its own tools are, so it can point the editor at them instead of
-              # every checkout carrying a machine-specific path. Derivation attributes are
-              # strings, so an attrset is spelled as JSON; these land in the server's
-              # machine settings, which is per devShell and never touches the workspace.
-              vscodeSettings = builtins.toJSON {
-                "nix.enableLanguageServer" = true;
-                "nix.serverPath" = "${pkgs.nil}/bin/nil";
-                "nix.formatterPath" = "${pkgs.nixfmt}/bin/nixfmt";
+                inherit NIX_DEVELOP_APP_ROOT;
+
+                vscodeExtensions = [
+                  # (1) built by Nix, pinned by flake.lock
+                  marketplace.jnoortheen.nix-ide # from nix-vscode-extensions
+                  marketplace.vitest.explorer # the test suite's runner, in the test explorer
+                  pkgs.vscode-extensions.bierner.markdown-mermaid
+                  # (2) resolved from the Marketplace on first use
+                  "esbenp.prettier-vscode"
+                ];
+
+                # Settings for the devShell's window, in the same spirit: the shell knows
+                # where its own tools are, so it can point the editor at them instead of
+                # every checkout carrying a machine-specific path. Derivation attributes are
+                # strings, so an attrset is spelled as JSON; these land in the server's
+                # machine settings, which is per devShell and never touches the workspace.
+                vscodeSettings = builtins.toJSON {
+                  "nix.enableLanguageServer" = true;
+                  "nix.serverPath" = "${pkgs.nil}/bin/nil";
+                  "nix.formatterPath" = "${pkgs.nixfmt}/bin/nixfmt";
+                };
               };
             };
-          };
         }
       ))
       // (

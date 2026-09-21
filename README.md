@@ -11,7 +11,8 @@ you.
    same way Dev Containers works. The remote extension host, its terminals, tasks,
    debuggers and language servers are children of that server, so they are in the devShell
    for real rather than approximated by copying environment variables around.
-3. Gives each devShell its own extension set, which the flake itself can declare.
+3. Gives each devShell its own extension set and settings, which the flake itself can
+   declare.
 
 The choice is not written anywhere: it takes effect by opening the window, and that
 window's remote authority is what remembers it — so reopening the window, restoring it
@@ -26,11 +27,12 @@ This needs the `resolvers` proposed API — see [Requirements](#requirements).
 
 | Command | Description |
 | --- | --- |
+| `Nix Develop: Reopen in devShell` | Reopen the folder with the extension host running inside the devShell |
 | `Nix Develop: Select devShell` | Switch the devShell a devShell window is running in; only offered inside one |
-| `Nix Develop: Show resolved environment` | Open the computed environment as a document |
-| `Nix Develop: Reopen in devShell` | Reopen the folder with the extension host running inside the devShell — see [docs/REMOTE.md](docs/REMOTE.md) |
 | `Nix Develop: Reopen folder locally` | Leave a devShell window |
+| `Nix Develop: Show resolved environment` | Open the computed environment as a document |
 | `Nix Develop: Show devShell extensions (remote)` | What is installed in this devShell, and where each extension runs |
+| `Nix Develop: Restart devShell server` | Put the window back on a devShell built from the flake as it is now |
 | `Nix Develop: Stop devShell server` | Stop the server backing a devShell; run inside a devShell window, it leaves the folder in a local one |
 | `Nix Develop: Show log` | Open the output channel |
 
@@ -51,155 +53,10 @@ clicking it opens one, since that is what picking a devShell locally means.
 | `nixDevelop.profile` | `"persistent"` | Keep a Nix GC root per devShell in `.vscode/nix-develop/`, or `"none"` to root nothing |
 | `nixDevelop.showBuildOutput` | `"always"` | Stream the devShell build into a terminal: `"always"`, `"onFailure"`, or `"never"` |
 | `nixDevelop.remote.connectTimeoutSeconds` | `180` | How long to wait for the server to listen |
-| `nixDevelop.remote.serverDownloadUrl` | update.code.visualstudio.com | Where to fetch the VS Code server |
+| `nixDevelop.remote.serverDownloadUrl` | `""` | Where to fetch the VS Code server; empty detects it from the editor's `product.json` |
 | `nixDevelop.remote.patchServerLd` | `true` | Point the server's bundled `node` at a glibc from nixpkgs with `patchelf` |
 
-## Watching the build
-
-The devShell is built on the way into the window, before the editor's server starts, so a
-cold flake means minutes of downloading and compiling -- and a flake that does not evaluate
-fails right there. That used to be a single line in a progress notification.
-
-It now streams into a terminal named after the devShell, opened for the duration of the
-build and carrying nothing but Nix's own output. `nixDevelop.showBuildOutput` decides whether it is shown as soon as the build starts
-(`always`, the default), only once something has failed (`onFailure`, which closes it again
-on success), or not collected at all (`never`).
-
-Nix is asked for `--log-format bar-with-logs`, and it gets a real terminal to write to, so
-what appears is what `nix develop` prints in a shell: the progress bar redrawn in place, in
-colour, and every line the builders print.
-
-The terminal is the reason for both. Nix decides whether to colour anything, and whether to
-draw its bar at all, by calling `isatty` on its own stderr -- there is no `--color`, no
-config key, no environment variable that changes its mind. A pipe from `spawn` is not a
-terminal, and allocating one needs a native module. Rather than take on `node-pty` as a
-dependency -- a prebuild per Electron ABI, which `vsce package --no-dependencies` would not
-ship anyway -- the extension borrows the editor's own copy from
-`<appRoot>/node_modules/node-pty`. The binding is Node-API, so it is ABI-stable rather than
-tied to one build of VS Code, and nothing depends on it being there: an editor that has
-moved or dropped it costs colour and nothing else, and the build still streams over a pipe.
-
-## Architecture
-
-[architecture/](architecture/) has a class diagram of every module and type, and a
-sequence diagram of a devShell window starting up, from the picker through to the server
-running inside `nix develop`.
-
-## How the environment is captured
-
-The naive approach — `nix print-dev-env --json` — gives you the *build* environment, not
-the shell you would get interactively. It reports `HOME=/homeless-shelter`, `TMPDIR=/build`,
-and hands back `shellHook` as an unexecuted string. Exporting that into a terminal is
-wrong in several ways at once.
-
-Instead this extension runs the environment dump *through* `nix develop`, which is what a
-user typing `nix develop` gets:
-
-```
-nix develop <installable> --profile <gcroot> --command bash -c '<dump>' <outfile>
-```
-
-(`--profile` is dropped when `nixDevelop.profile` is `"none"`.)
-
-Details that matter:
-
-- **The dump goes to a file, not stdout.** Shell hooks routinely print banners, and
-  `nix develop` itself writes notices such as `setting SOURCE_DATE_EPOCH`. Anything on
-  stdout would corrupt the payload.
-- **Variables are NUL-delimited**, so values containing newlines or `=` survive.
-- **`env -0` with a pure-bash fallback.** `nix develop` puts nixpkgs' *minimal* bash on
-  `PATH`, which is built without programmable completion, so `compgen` does not exist;
-  and a devShell may leave coreutils off `PATH` entirely. The fallback parses only the
-  variable *names* out of `export -p` and reads each value back by indirect expansion.
-- **A baseline is captured the same way** without the devShell, so only the shell's actual
-  contribution is applied.
-- **Search paths are prepended, not replaced.** `nix develop` appends the host `PATH`, so
-  the devShell's contribution is a strict prefix. Prepending just that prefix means entries
-  your own shell profile adds later are preserved.
-- **stdenv internals are filtered out.** `out`, `builder`, `phases`, `shellHook`, `name`,
-  `stdenv`, the `deps*` attributes and friends are derivation plumbing, not environment.
-  Session-owned variables (`HOME`, `SHELL`, `TMPDIR`, `PWD`, `SSH_*`, `VSCODE_*`) are left
-  alone too — in particular `TMPDIR`, which points at a scratch directory that will not
-  exist by the time you use the terminal.
-
-Run `Nix Develop: Show resolved environment` to see exactly what was computed, including
-what was filtered.
-
-## Why it is fast
-
-Local flakes are addressed by a **bare path**, never `path:<dir>`. That distinction matters
-more than it looks: a bare path lets Nix notice the directory is a Git work tree and use
-the Git source, which contains only tracked files. A `path:` ref instead hashes and copies
-the whole directory -- `node_modules`, `target/`, `result`, build outputs -- on every
-evaluation, and a churning untracked tree also defeats the Nix eval cache.
-
-On a 12 GB checkout with ~800 tracked files, listing devShells takes about 50ms with the
-Git source and does not finish within a minute with `path:`. The same applies to
-`nix develop`, so it is the build path too, not just the picker.
-
-If a flake.nix is not tracked by Git, Nix refuses to see it through the Git source; the
-extension falls back to `path:` automatically and logs the `git add` that would make it
-fast. A flake outside any Git repository has no source filtering available at all -- there
-Nix must hash the directory, and a slow evaluation says so.
-
-On top of that, the devShell list is cached against the mtime and size of flake.nix and
-flake.lock, and the Nix system double is remembered across windows.
-
-## direnv
-
-A devShell window takes its environment from the server running inside `nix develop`, so
-direnv and this extension no longer contend for the terminal — there is nothing to
-double-apply.
-
-What still matters is *which* devShell each one picked. A plain terminal outside the window
-follows `.envrc`, so a shell it names — `use flake .#ci` — is the project's own statement of
-which one it means, and the picker marks it and offers it first. It is a default, not a
-decision: the picker still lists every shell the flake has.
-
-## Which shell terminals use
-
-`nix develop` points `SHELL` at the bash it puts on `PATH`, which is nixpkgs' **minimal**
-build: no readline, so no history, no line editing, no completion, and prompt markers
-printed literally as `\[` and `\]`. Editors pick the terminal shell from `SHELL`.
-
-For a devShell window the shell is chosen in this order:
-
-1. the devShell's own `SHELL`, if it can actually serve as an interactive shell;
-2. your login shell;
-3. any usable bash the devShell puts on `PATH`.
-
-So a devShell needs no special handling. To fix it at the source, note that a plain
-attribute does **not** work -- the dev-env script sets `SHELL` from stdenv *before*
-evaluating the hook, so only a `shellHook` survives:
-
-```nix
-pkgs.mkShell {
-  packages = [ pkgs.bashInteractive ];          # puts a real bash on PATH
-  shellHook = ''
-    export SHELL=${pkgs.bashInteractive}/bin/bash   # ...and makes it the shell
-  '';
-}
-```
-
-That also fixes plain `nix develop` and direnv, not just this extension.
-
-## How it works
-
-`Nix Develop: Reopen in devShell` reopens the folder on a `vscode-remote://nix-develop+…`
-authority. The extension implements a `RemoteAuthorityResolver` — the mechanism Dev
-Containers and Remote-SSH use — and starts a VS Code server inside `nix develop`, then
-points the window at it.
-
-That requires the `resolvers` proposed API:
-
-```bash
-code --enable-proposed-api nix-develop.nix-develop
-```
-
-Without it there is nothing to fall back to, and the extension says so rather than failing
-later. [docs/REMOTE.md](docs/REMOTE.md) has the full mechanism.
-
-### Per-devShell extensions
+## Per-devShell extensions
 
 A remote window loads `workspace`-kind extensions from the **server's** extensions
 directory, which this extension keeps per devShell. So a devShell can bring its own editor
@@ -221,7 +78,7 @@ Switching devShells switches the extension set, with nothing to uninstall. Detai
 including `extensionKind` and the NixOS server-loader handling, are in
 [docs/REMOTE.md](docs/REMOTE.md).
 
-### Per-devShell settings
+## Per-devShell settings
 
 A pinned extension is of little use if the editor still points at a binary from the host,
 so a devShell can declare the settings that go with its toolchain. Derivation attributes
@@ -248,7 +105,7 @@ window and nowhere else, they outrank your user settings, and the workspace's ow
 the flake stops declaring are removed on the next open; keys you added to that file
 yourself are left alone.
 
-### Extensions from Nix
+## Extensions from Nix
 
 An entry in `vscodeExtensions` is either a Marketplace ID or a Nix package, and the two mix
 freely in one list. [`nix-vscode-extensions`](https://github.com/nix-community/nix-vscode-extensions)
@@ -269,31 +126,34 @@ devShells.default =
   };
 ```
 
-No extra convention is needed: `mkShell` stringifies a derivation to its store path — which
-is how a package is told apart from an ID — and both sources install to
-`$out/share/vscode/extensions/<publisher>.<name>`, which the extension reads and symlinks
-into the server's extension directory.
-
 Every devShell has its own extension directory, so the set matches what that shell declares:
 switching devShells drops the links the new one does not ask for, and nothing another shell
-installed leaks in. Extensions installed from the Marketplace are never removed.
-
-Switching devShells inside a devShell window also stops the server it leaves behind, so its
-extension host does not linger with the previous shell's extensions loaded.
+installed leaks in. Extensions installed from the Marketplace by hand are never removed.
 
 `flake.nix` in this repository has a working `editor` devShell demonstrating both forms.
 
-## Development
+## Compared with the alternatives
 
-```bash
-nix develop            # or: npm install
-npm run build
-npm test               # unit tests
-npm run test:e2e       # also drives the real nix CLI (needs network, slow on a cold store)
-npm run package        # produces a .vsix
-```
+Three ways to get a devShell into VS Code:
 
-Press <kbd>F5</kbd> to launch an Extension Development Host.
+| | Approach |
+| --- | --- |
+| **A** | **This extension** — the VS Code *server* runs inside `nix develop`; the window connects to it |
+| **B** | **direnv** — `.envrc` with `use flake`, plus the direnv extension, which copies the variables into the running editor |
+| **C** | **Launch from the shell** — each devShell packages its own `pkgs.vscode-with-extensions`, started as `nix develop .#x --command code --user-data-dir <per-shell dir> .` |
+
+🟢 strong · 🟡 partial, or conditional on discipline · 🔴 weak or absent
+
+| | **A. This extension** | **B. direnv** | **C. Launch from the shell** |
+| --- | --- | --- | --- |
+| **Packages, env vars** | 🟢 Terminals, tasks, debuggers and language servers are children of a server started by `nix develop` — inherited, not copied. | 🟡 Variables are copied into the running extension host. Whatever read the environment before direnv applied it keeps stale values. | 🟢 The whole editor is inside the shell, client and `ui` extensions included. Frozen at launch: a `flake.nix` change needs a restart. |
+| **Extensions per devShell** | 🟢 Own extensions directory per (folder, devShell), declared in the flake as IDs or `nix-vscode-extensions` derivations. Stays writable, so ad-hoc installs still work; `ui` extensions stay host-side. | 🔴 One global set shared by every project. The flake cannot express an extension at all. | 🟢 Every extension pinned, `ui` included. The directory is a read-only store path, so nothing can be installed ad hoc and your theme has to live in the project's flake. |
+| **Switching devShell** | 🟢 Status bar picker; reopens the window and swaps the extension set with it. | 🟡 Edit `.envrc`, `direnv allow`, reload the window. One shell per file. | 🔴 Out to a terminal, a new instance every time. |
+| **Several windows open** | 🟢 A server, extension host and extensions directory per devShell window. The devShell is encoded in the window's authority, so *Recent* reopens it on the same one. | 🟡 Environment is per window; the extension set is global. | 🟡 Separate instances share nothing — but *Open Folder* or *Recent* inside one silently reuses that instance's shell and extensions. |
+| **Runtime cost, N shells** | 🟡 One Node server per devShell in active use; an idle one exits five minutes after its last window disconnects. Single shared client. | 🟢 Nothing per shell. | 🔴 A full Electron instance per shell. |
+| **VS Code version** | 🟡 Your own install, unpinned — only the server is pinned to its commit. The server build is whichever your editor declares, so VSCodium works too (via its REH builds, with Open VSX for extensions). | 🔴 Your own install, unpinned. | 🟢 The editor binary comes from `flake.lock`, and two shells may sit on different versions. |
+| **Settings, keybindings, logins** | 🟢 One profile across local and devShell windows; sign in once. | 🟢 One profile. | 🔴 One profile per devShell: separate settings and credential store, every login repeated. |
+| **Setup and upkeep** | 🟡 Needs `--enable-proposed-api nix-develop.nix-develop` in `argv.json`, and proposed APIs can break between releases. Nothing added to the repository. | 🔴 direnv, nix-direnv, the extension, a committed `.envrc` and a `direnv allow` per clone — but that same `.envrc` also serves plain shells, other editors and CI. | 🔴 An editor build per devShell, a user data directory per devShell to name, gitignore and prune, and a launch line that must never be shortened: drop `--user-data-dir` once and the folder is handed to the running instance with the wrong shell and the wrong extensions, silently. |
 
 ## Requirements
 
@@ -301,9 +161,41 @@ Press <kbd>F5</kbd> to launch an Extension Development Host.
   `--extra-experimental-features 'nix-command flakes'` itself, so enabling them globally is
   not required.
 - VS Code 1.85 or newer.
+- The `resolvers` proposed API, which is what lets an extension resolve a remote authority:
+
+  ```bash
+  code --enable-proposed-api nix-develop.nix-develop
+  ```
+
+  Without it there is nothing to fall back to, and the extension says so rather than
+  failing later.
 
 The extension does not activate in an untrusted workspace: evaluating a flake runs
 arbitrary Nix code and shell hooks from the repository.
+
+## Documentation
+
+- [docs/REMOTE.md](docs/REMOTE.md) — how a devShell window is opened, end to end: the
+  authority, the server, per-devShell extensions and settings, and the limitations.
+- [architecture/](architecture/) — a class diagram of every module and type, and a sequence
+  diagram of a devShell window starting up.
+
+## Development
+
+```bash
+nix develop            # or: npm install
+npm run build
+npm test               # unit tests (Vitest); the end-to-end ones report as skipped
+npm run test:watch     # the same, re-running what a change touches
+npm run test:e2e       # also drives the real nix CLI (needs network, slow on a cold store)
+npm run typecheck      # src and test
+npm run package        # produces a .vsix
+```
+
+Tests live in [test/](test/) and run under [Vitest](https://vitest.dev) in plain Node: the
+`vscode` module only exists inside the editor, so [vitest.config.mts](vitest.config.mts)
+aliases it to [test/activation-stub.ts](test/activation-stub.ts).
+Press <kbd>F5</kbd> to launch an Extension Development Host.
 
 ## License
 

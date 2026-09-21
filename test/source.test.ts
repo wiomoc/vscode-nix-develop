@@ -1,9 +1,9 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { ok, test } from "./harness";
+import { describe, expect, it } from "vitest";
 
-/** Repo root: the bundle lives in `out/`, so its parent is the checkout. */
-const ROOT = path.resolve(__dirname, "..");
+/** Repo root: this file lives in `test/`, so its parent is the checkout. */
+const ROOT = path.resolve(import.meta.dirname, "..");
 
 async function sourceFiles(dir: string): Promise<string[]> {
   const out: string[] = [];
@@ -31,16 +31,14 @@ async function sourceFiles(dir: string): Promise<string[]> {
  * Other non-ASCII is deliberately allowed: user-facing strings use real ellipses and dashes,
  * and none of that makes a file disappear.
  */
-export async function run(): Promise<void> {
-  console.log("\nsource hygiene");
+const files = [
+  ...(await sourceFiles(path.join(ROOT, "src"))),
+  ...(await sourceFiles(path.join(ROOT, "test"))),
+];
 
-  const files = [
-    ...(await sourceFiles(path.join(ROOT, "src"))),
-    ...(await sourceFiles(path.join(ROOT, "test"))),
-  ];
-
-  await test("there are source files to check", () => {
-    ok(files.length > 10, `only found ${files.length} .ts files under ${ROOT}`);
+describe("source hygiene", () => {
+  it("there are source files to check", () => {
+    expect(files.length > 10, `only found ${files.length} .ts files under ${ROOT}`).toBe(true);
   });
 
   // Spelled the same way the rule demands, so this file does not trip its own check.
@@ -55,7 +53,7 @@ export async function run(): Promise<void> {
   ];
 
   for (const { name, code, escape } of banned) {
-    await test(`no literal ${name} in source; write "${escape}" instead`, async () => {
+    it(`no literal ${name} in source; write "${escape}" instead`, async () => {
       const ch = String.fromCharCode(code);
       const guilty: string[] = [];
       for (const file of files) {
@@ -64,10 +62,10 @@ export async function run(): Promise<void> {
         if (at === -1) continue;
         guilty.push(`${path.relative(ROOT, file)}:${text.slice(0, at).split("\n").length}`);
       }
-      ok(
+      expect(
         guilty.length === 0,
         `a literal ${name} does not belong in source; write "${escape}": ${guilty.join(", ")}`,
-      );
+      ).toBe(true);
     });
   }
-}
+});

@@ -1,9 +1,9 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { eq, ok, test } from "./harness";
+import { describe, expect, it } from "vitest";
 
-/** Repo root: the bundle lives in `out/`, so its parent is the checkout. */
-const ROOT = path.resolve(__dirname, "..");
+/** Repo root: this file lives in `test/`, so its parent is the checkout. */
+const ROOT = path.resolve(import.meta.dirname, "..");
 
 /** `c.get<T>("name", <default>)` in config.ts, capturing the name and the default. */
 const READ = /c\.get<[^>]+>\(\s*"([^"]+)"\s*,\s*([\s\S]*?)\s*\)(?:\s*\|\||\s*,|\s*\))/g;
@@ -32,48 +32,46 @@ function literal(expr: string): unknown {
  * this project more than once -- `respectDirenv` was read but never declared -- and it is
  * the shape a half-finished removal takes too.
  */
-export async function run(): Promise<void> {
-  console.log("\nsettings manifest");
+const pkg = JSON.parse(await fs.readFile(path.join(ROOT, "package.json"), "utf8"));
+const source = await fs.readFile(path.join(ROOT, "src", "config.ts"), "utf8");
 
-  const pkg = JSON.parse(await fs.readFile(path.join(ROOT, "package.json"), "utf8"));
-  const source = await fs.readFile(path.join(ROOT, "src", "config.ts"), "utf8");
+const contributed = new Map<string, unknown>(
+  Object.entries(pkg.contributes.configuration.properties as Record<string, { default: unknown }>)
+    .map(([key, value]) => [key.replace(/^nixDevelop\./, ""), value.default]),
+);
 
-  const contributed = new Map<string, unknown>(
-    Object.entries(pkg.contributes.configuration.properties as Record<string, { default: unknown }>)
-      .map(([key, value]) => [key.replace(/^nixDevelop\./, ""), value.default]),
-  );
+const read = new Map<string, string>();
+for (const m of source.matchAll(READ)) read.set(m[1], m[2]);
 
-  const read = new Map<string, string>();
-  for (const m of source.matchAll(READ)) read.set(m[1], m[2]);
-
-  await test("both declarations were found", () => {
-    ok(contributed.size > 5, `only ${contributed.size} settings in package.json`);
-    ok(read.size > 5, `only ${read.size} c.get calls in config.ts`);
+describe("settings manifest", () => {
+  it("both declarations were found", () => {
+    expect(contributed.size > 5, `only ${contributed.size} settings in package.json`).toBe(true);
+    expect(read.size > 5, `only ${read.size} c.get calls in config.ts`).toBe(true);
   });
 
-  await test("every contributed setting is read by readConfig", () => {
+  it("every contributed setting is read by readConfig", () => {
     const orphans = [...contributed.keys()].filter((name) => !read.has(name));
-    ok(orphans.length === 0, `contributed but never read: ${orphans.join(", ")}`);
+    expect(orphans.length === 0, `contributed but never read: ${orphans.join(", ")}`).toBe(true);
   });
 
-  await test("every setting readConfig reads is contributed", () => {
+  it("every setting readConfig reads is contributed", () => {
     const undeclared = [...read.keys()].filter((name) => !contributed.has(name));
-    ok(undeclared.length === 0, `read but never contributed: ${undeclared.join(", ")}`);
+    expect(undeclared.length === 0, `read but never contributed: ${undeclared.join(", ")}`).toBe(true);
   });
 
-  await test("the defaults agree", () => {
+  it("the defaults agree", () => {
     for (const [name, expr] of read) {
       if (!contributed.has(name)) continue;
       const mine = literal(expr);
       if (mine === undefined) continue; // not a literal; nothing to compare
-      eq(mine, contributed.get(name), `default for nixDevelop.${name}`);
+      expect(mine, `default for nixDevelop.${name}`).toEqual(contributed.get(name));
     }
   });
 
-  await test("the removed settings are gone from both", () => {
+  it("the removed settings are gone from both", () => {
     for (const name of ["devShell", "autoActivate", "remote.patchServerNode"]) {
-      ok(!contributed.has(name), `nixDevelop.${name} is still contributed`);
-      ok(!read.has(name), `nixDevelop.${name} is still read by readConfig`);
+      expect(contributed.has(name), `nixDevelop.${name} is still contributed`).toBe(false);
+      expect(read.has(name), `nixDevelop.${name} is still read by readConfig`).toBe(false);
     }
   });
-}
+});

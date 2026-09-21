@@ -210,18 +210,21 @@
     "vscode:prepublish": "npm run build",
     "build": "node esbuild.mjs --production",
     "watch": "node esbuild.mjs --watch",
-    "typecheck": "tsc --noEmit",
-    "test": "node test/build.mjs && node out/test.cjs",
-    "test:e2e": "node test/build.mjs && NIX_DEVELOP_E2E=1 node out/test.cjs",
-    "package": "vsce package --no-dependencies",
-    "test:server": "node test/build.mjs && NIX_DEVELOP_E2E=1 NIX_DEVELOP_COMMIT=$(code --version | sed -n 2p) node out/test.cjs"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
+    "test": "vitest run",
+    "test:unit": "vitest run --tagsFilter '!e2e'",
+    "test:e2e": "vitest run --tagsFilter e2e",
+    "test:watch": "vitest --tagsFilter '!e2e'",
+    "test:server": "NIX_DEVELOP_COMMIT=$(code --version | sed -n 2p) vitest run --tagsFilter e2e",
+    "package": "vsce package --no-dependencies"
   },
   "devDependencies": {
-    "@types/node": "^20.19.43",
+    "@types/node": "^22.20.4",
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^3.2.1",
-    "esbuild": "^0.24.0",
-    "typescript": "^5.6.0"
+    "esbuild": "^0.28.2",
+    "typescript": "^5.6.0",
+    "vitest": "^5.0.1"
   },
   "enabledApiProposals": [
     "resolvers"

@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // Vitest serves these as ESM regardless of what the package says it is, which is what
+    // makes `import.meta.dirname` and top-level `await` legal here and not in `src`.
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
+  },
+  "include": ["test/**/*.ts", "src/**/*.ts", "vitest.config.mts"]
+}

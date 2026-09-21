@@ -1,7 +1,9 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { eq, ok, test } from "./harness";
+import * as stub from "./activation-stub";
+import * as ext from "../src/extension";
+import { afterAll, describe, expect, it } from "vitest";
 
 /**
  * Runs the real `activate()` against a fake editor.
@@ -10,41 +12,37 @@ import { eq, ok, test } from "./harness";
  * activation disables every feature at once, and neither typechecking nor the unit tests
  * execute that path.
  */
-export async function run(): Promise<void> {
-  console.log("\nactivation");
 
-  const stub = await import("./activation-stub");
-  const ext = await import("../src/extension");
-
-  const storage = await fs.mkdtemp(path.join(os.tmpdir(), "nd-act-"));
-  const context = {
-    subscriptions: [] as { dispose(): void }[],
-    globalStorageUri: { fsPath: storage },
-    globalState: {
-      get: () => undefined,
-      update: async () => undefined,
+const storage = await fs.mkdtemp(path.join(os.tmpdir(), "nd-act-"));
+const context = {
+  subscriptions: [] as { dispose(): void }[],
+  globalStorageUri: { fsPath: storage },
+  globalState: {
+    get: () => undefined,
+    update: async () => undefined,
+  },
+  environmentVariableCollection: {
+    persistent: true,
+    description: "",
+    clear() {},
+    replace() {},
+    prepend() {},
+    append() {},
+    getScoped() {
+      return this;
     },
-    environmentVariableCollection: {
-      persistent: true,
-      description: "",
-      clear() {},
-      replace() {},
-      prepend() {},
-      append() {},
-      getScoped() {
-        return this;
-      },
-    },
-  };
+  },
+};
 
-  await test("activates in a plain window without throwing", async () => {
+describe("activation", () => {
+  it("activates in a plain window without throwing", async () => {
     stub.env.remoteAuthority = undefined;
     stub.workspace.workspaceFolders = undefined;
     await ext.activate(context as never);
-    ok(context.subscriptions.length > 0, "activation registered nothing");
+    expect(context.subscriptions.length > 0, "activation registered nothing").toBe(true);
   });
 
-  await test("registers every contributed command", () => {
+  it("registers every contributed command", () => {
     for (const id of [
       "nixDevelop.selectDevShell",
       "nixDevelop.showEnvironment",
@@ -54,34 +52,36 @@ export async function run(): Promise<void> {
       "nixDevelop.remoteExtensions",
       "nixDevelop.killServer",
     ]) {
-      ok(stub.recorded.commands.includes(id), `command ${id} was never registered`);
+      expect(stub.recorded.commands, `command ${id} was never registered`).toContain(id);
     }
   });
 
-  await test("registers the remote authority resolver when the API is present", () => {
-    eq(stub.recorded.resolverPrefix, "nix-develop");
-    ok(stub.recorded.labelFormatter, "the resource label formatter should be registered");
+  it("registers the remote authority resolver when the API is present", () => {
+    expect(stub.recorded.resolverPrefix).toEqual("nix-develop");
+    expect(stub.recorded.labelFormatter, "the resource label formatter should be registered").toBe(true);
   });
 
-  await test("publishes the context keys the menus depend on", () => {
-    ok("nixDevelop.hasFlake" in stub.recorded.contexts, "hasFlake context was never set");
-    ok("nixDevelop.inDevShell" in stub.recorded.contexts, "inDevShell context was never set");
+  it("publishes the context keys the menus depend on", () => {
+    expect("nixDevelop.hasFlake" in stub.recorded.contexts, "hasFlake context was never set").toBe(true);
+    expect("nixDevelop.inDevShell" in stub.recorded.contexts, "inDevShell context was never set").toBe(true);
   });
 
-  await test("activates inside a devShell window without throwing", async () => {
+  it("activates inside a devShell window without throwing", async () => {
     ext.deactivate();
     stub.recorded.commands.length = 0;
     stub.env.remoteAuthority = "nix-develop+deadbeefdeadbeef";
     const ctx2 = { ...context, subscriptions: [] as { dispose(): void }[] };
     await ext.activate(ctx2 as never);
-    eq(stub.recorded.contexts["nixDevelop.inDevShell"], true);
-    ok(
+    expect(stub.recorded.contexts["nixDevelop.inDevShell"]).toEqual(true);
+    expect(
       stub.recorded.commands.includes("nixDevelop.selectDevShell"),
       "switching devShells must stay available inside a devShell window",
-    );
+    ).toBe(true);
     ext.deactivate();
   });
 
-  stub.env.remoteAuthority = undefined;
-  await fs.rm(storage, { recursive: true, force: true }).catch(() => undefined);
-}
+  afterAll(async () => {
+    stub.env.remoteAuthority = undefined;
+    await fs.rm(storage, { recursive: true, force: true }).catch(() => undefined);
+  });
+});

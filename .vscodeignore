@@ -5,6 +5,8 @@ node_modules/**
 *.vsix
 esbuild.mjs
 tsconfig.json
+tsconfig.test.json
+vitest.config.mts
 flake.nix
 flake.lock
 .gitignore
