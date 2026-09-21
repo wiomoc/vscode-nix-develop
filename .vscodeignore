@@ -15,3 +15,5 @@ docs/**
 .vscode-test/**
 package-lock.json
 dist/**/*.map
+architecture/**
+result

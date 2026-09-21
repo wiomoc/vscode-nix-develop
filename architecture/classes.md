@@ -32,15 +32,12 @@ classDiagram
         +extraArgs: string[]
         +nixPath: string
         +buildTimeoutSeconds: number
+        +showBuildOutput: BuildOutputMode
         +remote: RemoteConfig
     }
 
     class RemoteConfig {
         <<interface>>
-        +extensions: string[]
-        +extensionsFromFlake: boolean
-        +settings: SettingsMap
-        +settingsFromFlake: boolean
         +serverDownloadUrl: string
         +connectTimeoutSeconds: number
         +patchServerLd: boolean
@@ -74,7 +71,9 @@ classDiagram
     class nix {
         <<module>>
         -FEATURE_ARGS: string[]
+        +BUILD_LOG_FORMAT: string
         -DUMP_SCRIPT: string
+        -ANSI_CSI: RegExp
         -systemDouble: string
         -pathRefDirs: Set~string~
         +run(exe, args, opts) RunResult
@@ -86,8 +85,11 @@ classDiagram
         +flakeRefFor(dir) string
         +markPathRefRequired(dir) void
         +isUntrackedFlakeError(err) boolean
+        +isEvaluationError(err) boolean
+        +nixErrorSummary(err) string
+        +nixErrorLocations(err) NixErrorLocation[]
         +toInstallable(selection, dir, system) string
-        +captureEnv(cfg, installable, dir, profile, token, onProgress) CaptureResult
+        +captureEnv(cfg, installable, dir, profile, opts) CaptureResult
     }
 
     class NixCommand {
@@ -96,11 +98,61 @@ classDiagram
         +args: string[]
     }
 
+    class NixErrorLocation {
+        <<interface>>
+        +file: string
+        +line: number
+        +column: number
+    }
+
     class DevelopOptions {
         <<interface>>
         +installable: string
         +profile: string | undefined
         +command: string[]
+        +logFormat?: string
+    }
+
+    class CaptureOptions {
+        <<interface>>
+        +token?: CancellationToken
+        +onProgress?: fn(line)
+        +onOutput?: fn(chunk)
+        +tty?: TtyOptions
+    }
+
+    class BuildTerminal {
+        -writer: EventEmitter~string~
+        -resizer: EventEmitter~Dimensions~
+        -terminal: Terminal
+        -backlog: string
+        -live: boolean
+        -closed: boolean
+        -size?: Dimensions
+        +dimensions: Dimensions | undefined
+        +onDidChangeDimensions: Event~Dimensions~
+        +write(chunk) void
+        +reveal() void
+        +dispose() void
+    }
+
+    class pty {
+        <<module>>
+        -cached?: PtyModule
+        +loadPty() PtyModule | undefined
+        +forgetPty() void
+    }
+
+    class PtyModule {
+        <<interface>>
+        +spawn(file, args, options) PtyProcess
+    }
+
+    class TtyOptions {
+        <<interface>>
+        +columns?: number
+        +rows?: number
+        +onResize?: Event~Dimensions~
     }
 
     class CaptureResult {
@@ -127,10 +179,11 @@ classDiagram
         -context: ExtensionContext
         -folder: WorkspaceFolder
         -status: StatusBar
-        -host: SessionHost
+        -onFlakeChanged() Promise
         -systemCache?: string
         -shellCache?: StampedShells
         -warnedSlow: boolean
+        -flakePresent: boolean
         +workspaceFolder: WorkspaceFolder
         +dir() string
         +hasFlake() boolean
@@ -141,12 +194,8 @@ classDiagram
         -warnSlowEvaluation(elapsed) void
         -offerSelection() void
         -watchFlake() void
+        -flakeChanged(names) void
         +dispose() void
-    }
-
-    class SessionHost {
-        <<interface>>
-        +chosen(session, picked) Promise
     }
 
     class StatusBar {
@@ -311,14 +360,35 @@ classDiagram
         +offerExtensionSync(context) void
     }
 
+    class flakeWatch {
+        <<module>>
+        -FLAKE_FILES: string[]
+        -SETTLE_MS: number
+        -digest(dir) string
+        +watchDevShellFlake(context, status, active) Disposable
+        +restartDevShellWindow(context) void
+    }
+
+    class recover {
+        <<module>>
+        -PENDING_KEY: string
+        -PENDING_TTL_MS: number
+        +offerLocalRecovery(context, target, locations, summary) void
+        +reopenFolderLocally(folder) void
+        +openPendingFile(context) boolean
+        +errorSite(locations, flakeDir) NixErrorLocation
+        -inCheckout(file, flakeDir) string
+    }
+
     class extension {
         <<module>>
         -sessions: Map~string,DevShellSession~
         -statusBar: StatusBar
-        -host: SessionHost
         +activate(context) void
         +deactivate() void
-        -makeHost() SessionHost
+        -flakeChanged() Promise
+        -anyFlake() boolean
+        -refreshStatus() void
         -registerResolver(context) void
         -syncSessions(context) void
         -resolveSession(prompt) DevShellSession
@@ -336,13 +406,20 @@ classDiagram
     nix ..> CaptureResult : returns
     nix ..> DevShell : returns
     nix ..> NixError : throws
+    nix ..> NixErrorLocation : returns
     nix ..> NixDevelopConfig : reads
 
-    DevShellSession *-- SessionHost
     DevShellSession --> StatusBar : reports to
     DevShellSession ..> nix : lists shells
     DevShellSession ..> direnv : picker default
     DevShellSession ..> config
+
+    flakeWatch ..> authority : decodes this window
+    flakeWatch --> StatusBar : marks stale
+    flakeWatch ..> ServerManager : stops before reload
+
+    recover ..> RemoteTarget : the folder to go back to
+    recover ..> NixErrorLocation : picks one to open
 
     environment ..> CaptureResult
 
@@ -384,9 +461,10 @@ classDiagram
 ever *chooses* a devShell; `NixDevelopResolver` exists per window and only ever *realises*
 one. They never call each other. The handoff between them is not an object reference but a
 URI: the session hands a name to `reopenInDevShell`, which encodes it into an authority and
-asks VS Code to open a window, and the resolver in that new window decodes it back. That is
-why `SessionHost` is a one-method interface — it is the seam where "which shell" stops
-being a local question.
+asks VS Code to open a window, and the resolver in that new window decodes it back. The
+only thing a session calls back into `extension` for is `onFlakeChanged` — a single
+callback, not an interface — because re-deriving the shared `when`-clause contexts and the
+one status bar is the only decision a folder cannot make alone.
 
 **`ServerManager` is constructed per resolve, not held.** It owns no server state; the lock
 file on disk does. Two windows resolving the same authority build two managers that agree
@@ -415,6 +493,9 @@ graph BT
     product[remote/product]:::leaf
 
     nix[nix]
+    pty[utils/pty]:::leaf
+    runSubprocess[utils/run-subprocess]
+    buildTerminal[utils/build-terminal]:::leaf
     environment[environment]
     ui[ui]
     session[session]
@@ -422,12 +503,15 @@ graph BT
     extensions[remote/extensions]
     settings[remote/settings]
     server[remote/server]
+    recover[remote/recover]
     resolver[remote/resolver]
     index[remote/index]
     ext[extension]
 
     nix --> config
     nix --> log
+    nix --> runSubprocess
+    runSubprocess --> pty
     environment --> nix
     ui --> nix
     session --> config
@@ -442,13 +526,19 @@ graph BT
     server --> nix
     server --> product
 
+    recover --> authority
+    recover --> nix
+
     resolver --> authority
+    resolver --> recover
     resolver --> extensions
     resolver --> settings
     resolver --> server
     resolver --> nix
+    resolver --> buildTerminal
 
     index --> resolver
+    index --> recover
     index --> server
     index --> environment
     index --> ui

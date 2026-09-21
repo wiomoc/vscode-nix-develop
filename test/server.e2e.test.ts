@@ -16,9 +16,8 @@ const cfg: NixDevelopConfig = {
   nixPath: "nix",
   buildTimeoutSeconds: 1800,
   profile: "persistent",
+  showBuildOutput: "onFailure",
   remote: {
-    extensions: [],
-    extensionsFromFlake: true,
     serverDownloadUrl: "https://update.code.visualstudio.com/commit:${commit}/server-${platform}/stable",
     connectTimeoutSeconds: 300,
     patchServerLd: true,
@@ -307,7 +306,6 @@ export async function run(): Promise<void> {
         return;
       }
       const res = await ensureInstalled({
-        cfg,
         launcher,
         extensionsDir,
         serverDataDir,

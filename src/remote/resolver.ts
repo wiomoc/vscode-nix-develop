@@ -2,26 +2,29 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { readConfig, type NixDevelopConfig } from "../config";
 import { ensureProfile } from "../profile";
+import { BuildTerminal } from "../utils/build-terminal";
 import { log } from "../utils/log";
 import {
   captureEnv,
   currentSystem,
+  isEvaluationError,
+  nixErrorLocations,
+  nixErrorSummary,
   toInstallable,
   type CaptureResult,
 } from "../nix";
+import { offerLocalRecovery } from "./recover";
 import { decodeAuthority, storageKeyFor, type RemoteTarget } from "./authority";
 import {
   collectExtensions,
   collectNixExtensions,
   ensureInstalled,
   extensionsDirFor,
-  mergedExtensions,
   syncNixExtensions,
 } from "./extensions";
 import {
   applyMachineSettings,
   collectSettings,
-  mergedSettings,
 } from "./settings";
 import { ServerManager } from "./server";
 import { patchServerNode as patchServerLd } from "./server-ld-patch";
@@ -37,9 +40,12 @@ import { patchServerNode as patchServerLd } from "./server-ld-patch";
  * approximating it by patching environment variables.
  *
  * Requires the `resolvers` proposed API, i.e. VS Code launched with
- * `--enable-proposed-api nix-develop.nix-develop`.
+ * `--enable-proposed-api wiomoc.nix-develop`.
  */
 export class NixDevelopResolver implements vscode.RemoteAuthorityResolver {
+  /** The terminal of the most recent build, kept only to retire it when the next starts. */
+  private build?: BuildTerminal;
+
   constructor(private readonly context: vscode.ExtensionContext) {}
 
   async resolve(
@@ -70,8 +76,26 @@ export class NixDevelopResolver implements vscode.RemoteAuthorityResolver {
         } catch (err) {
           const message = (err as Error).message ?? String(err);
           log.error(`resolving ${authority} failed: ${message}`);
-          // TemporarilyNotAvailable makes VS Code offer a retry rather than dropping the
-          // window straight into an unrecoverable error state.
+          // A flake that does not evaluate does not evaluate any differently a moment
+          // later, and `TemporarilyNotAvailable` is precisely what makes VS Code come
+          // back and ask again: the window would sit there re-running a build that
+          // cannot start. So an evaluation failure is reported as final, with what Nix
+          // said in place of the message the failure happened to carry -- the resolve
+          // may well have died at the server start, whose own message says only that it
+          // exited. Everything else -- a download, a builder, a port -- is worth another
+          // attempt, and keeps the retry it has always had.
+          if (isEvaluationError(err)) {
+            const summary = nixErrorSummary(err) ?? message;
+            // Not awaited: this resolve has to reject now, so VS Code stops waiting on a
+            // window that is not coming, while the offer waits on the user instead.
+            void offerLocalRecovery(
+              this.context,
+              target,
+              nixErrorLocations(err),
+              summary,
+            ).catch((e) => log.warn(`offering to reopen locally failed: ${(e as Error).message}`));
+            throw vscode.RemoteAuthorityResolverError.NotAvailable(summary, false);
+          }
           throw vscode.RemoteAuthorityResolverError.TemporarilyNotAvailable(
             message,
           );
@@ -118,6 +142,58 @@ export class NixDevelopResolver implements vscode.RemoteAuthorityResolver {
       );
     }
 
+    // Only past the attach: a window landing on a server that is already up builds nothing,
+    // and an empty terminal announcing that would be noise.
+    //
+    // A failed resolve leaves its terminal open to be read, and VS Code calls `resolve`
+    // again for every retry -- so the one from the attempt being retried goes now, rather
+    // than stacking up a terminal per attempt under the same name.
+    this.build?.dispose();
+    const build =
+      cfg.showBuildOutput === "never"
+        ? undefined
+        : new BuildTerminal(`nix develop: ${target.devShell}`);
+    this.build = build;
+    if (cfg.showBuildOutput === "always") build?.reveal();
+
+    try {
+      const resolved = await this.startFresh({
+        cfg,
+        target,
+        commit,
+        key,
+        servers,
+        progress,
+        build,
+      });
+      build?.dispose();
+      this.build = undefined;
+      return resolved;
+    } catch (err) {
+      // The message itself goes to the notification and the log; what the terminal has
+      // that neither does is the output that led up to it, so it is left standing.
+      build?.reveal();
+      throw err;
+    }
+  }
+
+  /**
+   * Build the devShell, prepare a server and start it inside the shell.
+   *
+   * Split from `startOrAttach` only so the terminal showing all of it has somewhere to be
+   * created and disposed around a single call.
+   */
+  private async startFresh(opts: {
+    cfg: NixDevelopConfig;
+    target: RemoteTarget;
+    commit: string;
+    key: string;
+    servers: ServerManager;
+    progress: (m: string) => void;
+    build: BuildTerminal | undefined;
+  }): Promise<vscode.ResolverResult> {
+    const { cfg, target, commit, key, servers, progress, build } = opts;
+
     progress("Preparing the VS Code server…");
     const launcher = await servers.ensureServer(commit, progress);
     // Before anything runs the launcher: installing extensions starts the same `node`.
@@ -150,10 +226,10 @@ export class NixDevelopResolver implements vscode.RemoteAuthorityResolver {
       installable,
       profile,
       progress,
+      build,
     });
 
     await this.installDeclaredExtensions({
-      cfg,
       launcher,
       extensionsDir,
       serverDataDir,
@@ -163,7 +239,6 @@ export class NixDevelopResolver implements vscode.RemoteAuthorityResolver {
     });
 
     await this.applyDeclaredSettings({
-      cfg,
       serverDataDir,
       devShellEnv: capture?.inside ?? {},
     });
@@ -209,12 +284,9 @@ export class NixDevelopResolver implements vscode.RemoteAuthorityResolver {
     installable: string;
     profile: string | undefined;
     progress: (m: string) => void;
+    build: BuildTerminal | undefined;
   }): Promise<CaptureResult | undefined> {
-    if (
-      !opts.cfg.remote.extensionsFromFlake &&
-      !opts.cfg.remote.settingsFromFlake
-    )
-      return undefined;
+    const build = opts.build;
     try {
       opts.progress("Reading what the devShell declares for the editor…");
       return await captureEnv(
@@ -222,8 +294,25 @@ export class NixDevelopResolver implements vscode.RemoteAuthorityResolver {
         opts.installable,
         opts.target.flakeDir,
         opts.profile,
+        build
+          ? {
+              onOutput: (chunk) => build.write(chunk),
+              // Nix draws for the terminal it is told about, so it is given this one:
+              // its width now, and its width again whenever the user resizes the panel.
+              tty: {
+                columns: build.dimensions?.columns,
+                rows: build.dimensions?.rows,
+                onResize: build.onDidChangeDimensions,
+              },
+            }
+          : {},
       );
     } catch (err) {
+      // Unless the flake itself is the problem. This is the first thing to evaluate it,
+      // so it is where a typo in flake.nix surfaces with the whole build log behind it;
+      // carrying on would only run the same evaluation again under the server start and
+      // fail there, with less to say about why.
+      if (isEvaluationError(err)) throw err;
       log.warn(
         `could not read the devShell environment: ${(err as Error).message}`,
       );
@@ -235,7 +324,6 @@ export class NixDevelopResolver implements vscode.RemoteAuthorityResolver {
    * Resolve the devShell's declared extensions and install the missing ones.
    */
   private async installDeclaredExtensions(opts: {
-    cfg: NixDevelopConfig;
     launcher: string;
     extensionsDir: string;
     serverDataDir: string;
@@ -243,14 +331,10 @@ export class NixDevelopResolver implements vscode.RemoteAuthorityResolver {
     target: RemoteTarget;
     progress: (m: string) => void;
   }): Promise<void> {
-    const fromFlake = opts.cfg.remote.extensionsFromFlake
-      ? opts.capture
-      : undefined;
-
     // Extensions the devShell supplies as Nix packages are already built: they only need
     // linking into the extension directory, with no download and no version drift.
-    if (fromFlake) {
-      const nixExtensions = await collectNixExtensions(fromFlake);
+    if (opts.capture) {
+      const nixExtensions = await collectNixExtensions(opts.capture);
       if (nixExtensions.length > 0) {
         opts.progress(
           `Linking ${nixExtensions.length} Nix-built extension(s)\u2026`,
@@ -266,17 +350,12 @@ export class NixDevelopResolver implements vscode.RemoteAuthorityResolver {
       );
     }
 
-    const sources = collectExtensions(opts.cfg, fromFlake?.inside ?? {});
-    const wanted = mergedExtensions(sources);
+    const wanted = collectExtensions(opts.capture?.inside ?? {});
     if (wanted.length === 0) return;
 
-    log.info(
-      `devShell extensions -- from flake: [${sources.fromFlake.join(", ")}], ` +
-        `from settings: [${sources.fromSettings.join(", ")}]`,
-    );
+    log.info(`devShell extensions -- from flake: [${wanted.join(", ")}]`);
 
     const { failed } = await ensureInstalled({
-      cfg: opts.cfg,
       launcher: opts.launcher,
       extensionsDir: opts.extensionsDir,
       serverDataDir: opts.serverDataDir,
@@ -300,18 +379,13 @@ export class NixDevelopResolver implements vscode.RemoteAuthorityResolver {
    * the devShell.
    */
   private async applyDeclaredSettings(opts: {
-    cfg: NixDevelopConfig;
     serverDataDir: string;
     devShellEnv: Record<string, string>;
   }): Promise<void> {
-    const sources = collectSettings(opts.cfg, opts.devShellEnv);
-    const values = mergedSettings(sources);
-    const fromFlake = Object.keys(sources.fromFlake);
-    if (fromFlake.length > 0 || Object.keys(sources.fromSettings).length > 0) {
-      log.info(
-        `devShell settings -- from flake: [${fromFlake.join(", ")}], ` +
-          `from settings: [${Object.keys(sources.fromSettings).join(", ")}]`,
-      );
+    const values = collectSettings(opts.devShellEnv);
+    const keys = Object.keys(values);
+    if (keys.length > 0) {
+      log.info(`devShell settings -- from flake: [${keys.join(", ")}]`);
     }
     await applyMachineSettings(opts.serverDataDir, values).catch((err) =>
       log.warn(

@@ -26,16 +26,17 @@ This needs the `resolvers` proposed API — see [Requirements](#requirements).
 
 | Command | Description |
 | --- | --- |
-| `Nix Develop: Select devShell` | Pick from the flake's `devShells.<system>` |
+| `Nix Develop: Select devShell` | Switch the devShell a devShell window is running in; only offered inside one |
 | `Nix Develop: Show resolved environment` | Open the computed environment as a document |
 | `Nix Develop: Reopen in devShell` | Reopen the folder with the extension host running inside the devShell — see [docs/REMOTE.md](docs/REMOTE.md) |
 | `Nix Develop: Reopen folder locally` | Leave a devShell window |
 | `Nix Develop: Show devShell extensions (remote)` | What is installed in this devShell, and where each extension runs |
-| `Nix Develop: Stop devShell server` | Stop the server backing a devShell |
+| `Nix Develop: Stop devShell server` | Stop the server backing a devShell; run inside a devShell window, it leaves the folder in a local one |
 | `Nix Develop: Show log` | Open the output channel |
 
 The status bar shows the active devShell; click it to switch. In a local window it reads
-`devShell` with no name — a devShell is only ever active *inside* one of its windows.
+`devShell` with no name — a devShell is only ever active *inside* one of its windows — and
+clicking it opens one, since that is what picking a devShell locally means.
 
 ## Settings
 
@@ -48,13 +49,35 @@ The status bar shows the active devShell; click it to switch. In a local window 
 | `nixDevelop.nixPath` | `"nix"` | Path to the `nix` binary |
 | `nixDevelop.buildTimeoutSeconds` | `1800` | Abort a build after this long |
 | `nixDevelop.profile` | `"persistent"` | Keep a Nix GC root per devShell in `.vscode/nix-develop/`, or `"none"` to root nothing |
-| `nixDevelop.remote.extensions` | `[]` | Extension IDs to install into the devShell |
-| `nixDevelop.remote.extensionsFromFlake` | `true` | Also read `vscodeExtensions` from the devShell |
-| `nixDevelop.remote.settings` | `{}` | Editor settings to apply inside the devShell window |
-| `nixDevelop.remote.settingsFromFlake` | `true` | Also read `vscodeSettings` from the devShell |
+| `nixDevelop.showBuildOutput` | `"always"` | Stream the devShell build into a terminal: `"always"`, `"onFailure"`, or `"never"` |
 | `nixDevelop.remote.connectTimeoutSeconds` | `180` | How long to wait for the server to listen |
 | `nixDevelop.remote.serverDownloadUrl` | update.code.visualstudio.com | Where to fetch the VS Code server |
 | `nixDevelop.remote.patchServerLd` | `true` | Point the server's bundled `node` at a glibc from nixpkgs with `patchelf` |
+
+## Watching the build
+
+The devShell is built on the way into the window, before the editor's server starts, so a
+cold flake means minutes of downloading and compiling -- and a flake that does not evaluate
+fails right there. That used to be a single line in a progress notification.
+
+It now streams into a terminal named after the devShell, opened for the duration of the
+build and carrying nothing but Nix's own output. `nixDevelop.showBuildOutput` decides whether it is shown as soon as the build starts
+(`always`, the default), only once something has failed (`onFailure`, which closes it again
+on success), or not collected at all (`never`).
+
+Nix is asked for `--log-format bar-with-logs`, and it gets a real terminal to write to, so
+what appears is what `nix develop` prints in a shell: the progress bar redrawn in place, in
+colour, and every line the builders print.
+
+The terminal is the reason for both. Nix decides whether to colour anything, and whether to
+draw its bar at all, by calling `isatty` on its own stderr -- there is no `--color`, no
+config key, no environment variable that changes its mind. A pipe from `spawn` is not a
+terminal, and allocating one needs a native module. Rather than take on `node-pty` as a
+dependency -- a prebuild per Electron ABI, which `vsce package --no-dependencies` would not
+ship anyway -- the extension borrows the editor's own copy from
+`<appRoot>/node_modules/node-pty`. The binding is Node-API, so it is ABI-stable rather than
+tied to one build of VS Code, and nothing depends on it being there: an editor that has
+moved or dropped it costs colour and nothing else, and the build still streams over a pipe.
 
 ## Architecture
 
@@ -219,8 +242,7 @@ These land in the devShell server's *machine* settings, so they apply to that de
 window and nowhere else, they outrank your user settings, and the workspace's own
 `.vscode/settings.json` still wins over them. Nothing is written into the workspace. Keys
 the flake stops declaring are removed on the next open; keys you added to that file
-yourself are left alone. `nixDevelop.remote.settings` is the per-checkout equivalent, and
-beats the flake where both name the same key.
+yourself are left alone.
 
 ### Extensions from Nix
 

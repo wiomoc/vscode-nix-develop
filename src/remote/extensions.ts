@@ -1,6 +1,5 @@
 import * as fsPromises from "node:fs/promises";
 import * as path from "node:path";
-import type { NixDevelopConfig } from "../config";
 import { log } from "../utils/log";
 import { exists, isDirectory } from "../utils/fs-stat";
 import { run } from "../utils/run-subprocess";
@@ -13,65 +12,43 @@ import { run } from "../utils/run-subprocess";
  * all it takes to scope a set of extensions to one devShell: two devShells in the same repo
  * get genuinely separate extension sets, and neither disturbs the local window.
  *
- * Which extensions belong to a devShell can come from two places:
+ * Which extensions belong to a devShell is declared by the devShell itself. `mkShell` turns
+ * a Nix list attribute into a space-separated environment variable, so
  *
- *  1. `nixDevelop.remote.extensions` in workspace settings -- the `devcontainer.json`
- *     equivalent, good for per-checkout tweaks.
+ *     pkgs.mkShell {
+ *       vscodeExtensions = [ "rust-lang.rust-analyzer" "tamasfe.even-better-toml" ];
+ *     }
  *
- *  2. The devShell itself. `mkShell` turns a Nix list attribute into a space-separated
- *     environment variable, so
- *
- *         pkgs.mkShell {
- *           vscodeExtensions = [ "rust-lang.rust-analyzer" "tamasfe.even-better-toml" ];
- *         }
- *
- *     arrives as `vscodeExtensions="rust-lang.rust-analyzer tamasfe.even-better-toml"`.
- *     The toolchain and the editor support for it are then declared and versioned in the
- *     same expression, which is the whole point of putting the shell in the flake.
+ * arrives as `vscodeExtensions="rust-lang.rust-analyzer tamasfe.even-better-toml"`. The
+ * toolchain and the editor support for it are then declared and versioned in the same
+ * expression, which is the whole point of putting the shell in the flake.
  */
 export const FLAKE_EXTENSION_VARS = ["vscodeExtensions", "VSCODE_EXTENSIONS"];
 
 const EXTENSION_ID =
   /^[A-Za-z0-9][A-Za-z0-9_-]*\.[A-Za-z0-9][A-Za-z0-9_-]*(@[\w.^-]+)?$/;
 
-export interface ExtensionSources {
-  /** From `nixDevelop.remote.extensions`. */
-  fromSettings: string[];
-  /** From the devShell's own environment. */
-  fromFlake: string[];
-}
-
+/** Extension ids the devShell declares, in declaration order and without duplicates. */
 export function collectExtensions(
-  cfg: NixDevelopConfig,
   devShellEnv: Record<string, string>,
-): ExtensionSources {
-  const fromSettings = cfg.remote.extensions
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  const fromFlake: string[] = [];
-  if (cfg.remote.extensionsFromFlake) {
-    for (const name of FLAKE_EXTENSION_VARS) {
-      const raw = devShellEnv[name];
-      if (!raw) continue;
-      for (const id of raw.split(/[\s,]+/)) {
-        const trimmed = id.trim();
-        if (!trimmed) continue;
-        if (!EXTENSION_ID.test(trimmed)) {
-          log.warn(
-            `ignoring '${trimmed}' from ${name}: not a publisher.name extension id`,
-          );
-          continue;
-        }
-        fromFlake.push(trimmed);
+): string[] {
+  const found: string[] = [];
+  for (const name of FLAKE_EXTENSION_VARS) {
+    const raw = devShellEnv[name];
+    if (!raw) continue;
+    for (const id of raw.split(/[\s,]+/)) {
+      const trimmed = id.trim();
+      if (!trimmed) continue;
+      if (!EXTENSION_ID.test(trimmed)) {
+        log.warn(
+          `ignoring '${trimmed}' from ${name}: not a publisher.name extension id`,
+        );
+        continue;
       }
+      found.push(trimmed);
     }
   }
-  return { fromSettings, fromFlake };
-}
-
-export function mergedExtensions(sources: ExtensionSources): string[] {
-  return [...new Set([...sources.fromFlake, ...sources.fromSettings])];
+  return [...new Set(found)];
 }
 
 /** Extension ids currently present in a server extensions directory. */
@@ -103,7 +80,6 @@ export async function installedIn(extensionsDir: string): Promise<string[]> {
  * that is unavailable offline, should not stop the devShell window from opening.
  */
 export async function ensureInstalled(opts: {
-  cfg: NixDevelopConfig;
   launcher: string;
   extensionsDir: string;
   serverDataDir: string;

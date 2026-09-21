@@ -24,8 +24,7 @@ and only user-level settings apply.
 Reproduced: a workspace with `.vscode/settings.json` containing `{"nixDevelop.impure": true}`
 produced a server command with **no** `--impure`.
 
-Silently dropped at resolve time: `impure`, `extraArgs`, `buildTimeoutSeconds`,
-`remote.extensions`, `remote.extensionsFromFlake`.
+Silently dropped at resolve time: `impure`, `extraArgs`, `buildTimeoutSeconds`.
 
 This is the worst shape of bug: the setting is accepted, displayed in the settings UI as
 folder-scoped, and does nothing.
@@ -34,7 +33,7 @@ folder-scoped, and does nothing.
 already in the authority. Needs a tolerant parse, since VS Code settings files legitimately
 contain comments and trailing commas.
 
-**Fix, minimum.** Re-declare those five as `machine`/`window` scope so the UI stops implying
+**Fix, minimum.** Re-declare those three as `machine`/`window` scope so the UI stops implying
 per-folder support, and say so in the README. Being honest about the limit beats faking it.
 
 

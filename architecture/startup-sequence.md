@@ -32,7 +32,7 @@ sequenceDiagram
         User-->>Session: Select devShell
     end
 
-    User->>Ext: command nixDevelop.selectDevShell
+    User->>Ext: command nixDevelop.reopenInDevShell
     Ext->>Session: promptForDevShell()
 
     Session->>Session: flakeStamp() — mtime+size of flake.nix/flake.lock
@@ -62,8 +62,7 @@ sequenceDiagram
     User-->>UI: "ci"
     UI-->>Session: { kind: "shell", value: "ci" }
 
-    Session->>Ext: host.chosen(session, picked)
-    Ext->>Code: reopenInDevShell(folder, "ci", flakeDir)
+    Session->>Code: reopenInDevShell(folder, "ci", flakeDir)
     Note over Ext: refuses here if the resolvers proposed API was not granted
     Ext->>Auth: authorityFor({ folder, flakeDir, devShell })
     Auth-->>Ext: nix-develop+<lowercase base32 payload>
@@ -89,6 +88,7 @@ sequenceDiagram
     participant FS as globalStorage
     participant Extn as remote/extensions
     participant Set as remote/settings
+    participant Term as BuildTerminal
     participant Server as code-server
 
     Code->>Res: resolve("nix-develop+…", { resolveAttempt })
@@ -122,6 +122,8 @@ sequenceDiagram
 
     rect rgb(40, 45, 70)
         Note over Res,Server: Cold path
+        Res->>Term: new BuildTerminal("nix develop: ci")
+        Note right of Term: only past the attach: a window landing on a<br/>running server builds nothing<br/>(skipped when showBuildOutput is never)
         Res->>SM: ensureServer(commit, progress)
         SM->>Prod: clientProduct() — read the editor's product.json
         Prod-->>SM: { serverApplicationName, serverDataFolderName, … }
@@ -162,11 +164,17 @@ sequenceDiagram
 
     rect rgb(60, 50, 30)
         Note over Res,NixCLI: One capture serves extensions and settings
-        Res->>Nix: captureEnv(cfg, installable, flakeDir, profile)
+        Res->>Nix: captureEnv(cfg, installable, flakeDir, profile, { onOutput, tty })
+        Note right of Res: tty carries the terminal's width —<br/>Nix lays its progress bar out for it
         Nix->>NixCLI: bash -c DUMP_SCRIPT (baseline, no devShell)
         Nix->>Nix: developCommand(...) — mkdir profile dir
-        Nix->>NixCLI: nix develop <installable> --profile <p> --command bash -c DUMP_SCRIPT
+        Nix->>Nix: loadPty() — the editor's node-pty from <appRoot>, or nothing
+        Nix->>NixCLI: nix --log-format bar-with-logs develop <installable> --profile <p> --command bash -c DUMP_SCRIPT
+        Note right of NixCLI: under a pty when one was lent, so isatty()<br/>is true and Nix draws its bar in colour;<br/>over a pipe otherwise, same logs, no colour
         Note right of NixCLI: builds the devShell<br/>--profile makes it a GC root that stays<br/>until the user deletes .vscode/nix-develop
+        NixCLI-->>Nix: stdout + stderr, streamed
+        Nix->>Term: write(chunk) — verbatim, CRLF-corrected, nothing of ours added
+        Nix-->>Res: onProgress(line) — same stream, ANSI stripped
         NixCLI-->>Nix: NUL-delimited env, written to a temp file
         Nix-->>Res: CaptureResult { inside, baseline }
         Note over Res: a failure here is logged, not fatal —<br/>the window opens without what the flake declared
@@ -207,8 +215,17 @@ sequenceDiagram
     Note right of Res: remote and local URIs address the same disk,<br/>so recently-opened and SCM see one file, not two
 ```
 
-Any throw inside `startOrAttach` becomes `TemporarilyNotAvailable`, so VS Code offers a
-retry instead of dropping the window into an unrecoverable state.
+A throw inside `startOrAttach` is classified before it leaves `resolve`. Anything Nix could
+plausibly do differently next time -- a download, a builder, a port that never opened --
+becomes `TemporarilyNotAvailable`, so VS Code offers a retry instead of dropping the window
+into an unrecoverable state. A failure to *evaluate* the flake (`isEvaluationError`) becomes
+`NotAvailable` carrying `nixErrorSummary`, because the retry that code asks for would re-run
+an evaluation that fails identically every time: the window would loop rather than land
+anywhere the user could act on. A throw also reveals the
+build terminal, so the one-line notification has the output that led to it sitting beside
+it -- the message is not written in there, only Nix's own output ever is. On success the
+terminal is disposed unless `nixDevelop.showBuildOutput` is `always`, which was a request to
+keep watching.
 
 ## Phase 3 — the window is up
 

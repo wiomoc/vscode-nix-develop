@@ -3,7 +3,7 @@
   "displayName": "Nix Develop",
   "description": "Select a devShell from your flake.nix and reopen the workspace inside it, with the editor running in nix develop.",
   "version": "0.6.3",
-  "publisher": "nix-develop",
+  "publisher": "wiomoc",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -71,6 +71,11 @@
         "category": "Nix Develop"
       },
       {
+        "command": "nixDevelop.restartDevShell",
+        "title": "Restart devShell server",
+        "category": "Nix Develop"
+      },
+      {
         "command": "nixDevelop.killServer",
         "title": "Stop devShell server",
         "category": "Nix Develop"
@@ -132,33 +137,21 @@
           ],
           "markdownDescription": "How the built devShell is kept alive against `nix store gc`.\n\n`--profile` is the only thing that makes a devShell a GC root. `persistent` writes one per devShell under `.vscode/nix-develop/<devShell>/` -- next to the project, with a `.gitignore` covering the whole directory -- and never removes it, so the toolchain a window needs is still there after a garbage collection or on a flight. `none` writes nothing into the project and accepts that the shell may be collected; on Linux, Nix's GC still spares store paths a *running* process references, so this mostly costs you rebuilds rather than a broken window."
         },
-        "nixDevelop.remote.extensions": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
+        "nixDevelop.showBuildOutput": {
+          "type": "string",
+          "enum": [
+            "always",
+            "onFailure",
+            "never"
+          ],
+          "default": "always",
           "scope": "resource",
-          "markdownDescription": "Extension IDs to install into this devShell remote server, e.g. rust-lang.rust-analyzer."
-        },
-        "nixDevelop.remote.extensionsFromFlake": {
-          "type": "boolean",
-          "default": true,
-          "scope": "resource",
-          "markdownDescription": "Also read extension IDs from the devShell itself. A `vscodeExtensions` list attribute on `mkShell` becomes a space-separated environment variable, so the flake can declare its own editor extensions."
-        },
-        "nixDevelop.remote.settings": {
-          "type": "object",
-          "default": {},
-          "scope": "resource",
-          "additionalProperties": true,
-          "markdownDescription": "Editor settings to apply inside this devShell's window, e.g. `{ \"nix.serverPath\": \"/run/current-system/sw/bin/nil\" }`. They are written to the devShell server's machine settings, so they outrank your user settings there and apply to no other window. These win over anything the flake declares."
-        },
-        "nixDevelop.remote.settingsFromFlake": {
-          "type": "boolean",
-          "default": true,
-          "scope": "resource",
-          "markdownDescription": "Also read editor settings from the devShell itself. A `vscodeSettings` attribute on `mkShell` -- `builtins.toJSON { \"nix.serverPath\" = \"${pkgs.nil}/bin/nil\"; }`, or one `key=value` per line -- lets the flake point the editor at the tools it provides."
+          "enumDescriptions": [
+            "Stream the build into a terminal and show it as soon as the build starts. The terminal stays after the window opens.",
+            "Stream the build into a terminal, but bring it into view only if opening the devShell fails. On success the terminal is closed again.",
+            "Collect no build output. Nix is run with its default log format and only the progress notification is updated."
+          ],
+          "markdownDescription": "Whether to show what `nix develop` is doing while a devShell window opens.\n\nThe devShell is built before the editor's server starts, so downloads, compiles and the evaluation error that says which attribute is missing all happen there. The output goes to a terminal named after the devShell, with Nix asked for `--log-format bar-with-logs` so the full build logs arrive rather than the handful of lines Nix prints by default."
         },
         "nixDevelop.remote.serverDownloadUrl": {
           "type": "string",
@@ -184,7 +177,7 @@
       "commandPalette": [
         {
           "command": "nixDevelop.selectDevShell",
-          "when": "nixDevelop.hasFlake || nixDevelop.inDevShell"
+          "when": "nixDevelop.inDevShell"
         },
         {
           "command": "nixDevelop.showEnvironment",
@@ -200,6 +193,10 @@
         },
         {
           "command": "nixDevelop.remoteExtensions",
+          "when": "nixDevelop.inDevShell"
+        },
+        {
+          "command": "nixDevelop.restartDevShell",
           "when": "nixDevelop.inDevShell"
         },
         {

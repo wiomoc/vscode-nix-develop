@@ -5,6 +5,8 @@ import { computeDelta } from "../src/environment";
 import type { NixDevelopConfig } from "../src/config";
 import { captureEnv, currentSystem, listDevShells, toInstallable } from "../src/nix";
 import { eq, ok, test } from "./harness";
+import * as stub from "./activation-stub";
+import { forgetPty } from "../src/utils/pty";
 
 const cfg: NixDevelopConfig = {
   flakeDirectory: ".",
@@ -14,9 +16,8 @@ const cfg: NixDevelopConfig = {
   nixPath: "nix",
   buildTimeoutSeconds: 1800,
   profile: "persistent",
+  showBuildOutput: "onFailure",
   remote: {
-    extensions: [],
-    extensionsFromFlake: true,
     serverDownloadUrl: "https://example.invalid/${commit}/${platform}",
     connectTimeoutSeconds: 180,
     patchServerLd: true,
@@ -74,8 +75,61 @@ export async function run(): Promise<void> {
   });
 
   const installable = toInstallable("default", dir, system);
-  const capture = await captureEnv(cfg, installable, dir, path.join(dir, ".profile", "devshell"));
+  const streamed: string[] = [];
+  const progressed: string[] = [];
+  const capture = await captureEnv(cfg, installable, dir, path.join(dir, ".profile", "devshell"), {
+    onOutput: (chunk) => streamed.push(chunk),
+    onProgress: (line) => progressed.push(line),
+  });
   const delta = computeDelta(capture);
+
+  await test("the build is streamed as it happens, not collected at the end", () => {
+    ok(streamed.length > 0, "nothing reached the terminal sink");
+    // `--log-format bar-with-logs` is what puts the builders' own output here; without it
+    // Nix says almost nothing over a pipe, and a failing shellHook would be invisible.
+    ok(
+      streamed.join("").includes("a noisy banner on stdout"),
+      `the shellHook's own output should stream too, got: ${streamed.join("").slice(0, 400)}`,
+    );
+  });
+
+  // The same build again, this time with a terminal to write to. Everything Nix withholds
+  // over a pipe -- colour, and the progress bar it redraws in place -- depends on this and
+  // on nothing else, so it is worth proving against the real CLI rather than assuming.
+  const appRoot = process.env.NIX_DEVELOP_APP_ROOT;
+  if (!appRoot) {
+    console.log("  [tty path skipped: set NIX_DEVELOP_APP_ROOT to an editor's resources/app]");
+  } else {
+    forgetPty();
+    const previousAppRoot = stub.env.appRoot;
+    stub.env.appRoot = appRoot;
+    const coloured: string[] = [];
+    await captureEnv(cfg, installable, dir, path.join(dir, ".profile", "devshell"), {
+      onOutput: (chunk) => coloured.push(chunk),
+      tty: { columns: 100, rows: 30 },
+    });
+    stub.env.appRoot = previousAppRoot;
+    forgetPty();
+
+    await test("given a terminal, Nix colours its output and draws its bar", () => {
+      const text = coloured.join("");
+      ok(text.includes("\u001b["), "no escape codes: Nix still thinks it is writing to a pipe");
+      ok(text.includes("\r"), "the progress bar redraws with carriage returns");
+    });
+
+    await test("the pipe path really was the plain one", () => {
+      eq(
+        streamed.join("").includes("\u001b["),
+        false,
+        "the earlier capture had no terminal, so it should have had no colour",
+      );
+    });
+  }
+
+  await test("the notification sink sees plain text, never escape codes", () => {
+    const escaped = progressed.filter((l) => l.includes("\u001b"));
+    eq(escaped, [], "a progress notification would print these literally");
+  });
 
   await test("shellHook side effects are captured", () => {
     eq(delta.replace.get("FROM_HOOK"), "1", "the shellHook must have been executed");

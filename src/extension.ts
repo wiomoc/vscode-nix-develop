@@ -10,38 +10,49 @@ import {
   decodeAuthority,
   reopenInDevShell,
   reopenLocally,
+  restartDevShellWindow,
+  watchDevShellFlake,
   offerExtensionSync,
+  openPendingFile,
   showRemoteEnvironment,
   showRemoteExtensions,
   switchDevShellInRemoteWindow,
   sweepServerLocks,
 } from "./remote";
-import { DevShellSession, type SessionHost } from "./session";
-import { registerResourceLabelFormatter, StatusBar } from "./ui";
+import { DevShellSession } from "./session";
+import {
+  registerResourceLabelFormatter,
+  StatusBar,
+  type StatusState,
+} from "./ui";
 
 /** One session per workspace folder, keyed by folder URI. */
 const sessions = new Map<string, DevShellSession>();
 let statusBar: StatusBar;
-let host: SessionHost;
 
 /**
- * Turns a devShell choice into an outcome.
- *
- * Selecting a devShell is the moment the user expects something to happen, and opening the
- * window against it is the only thing the choice is for, so it happens straight away --
- * nothing is stored and no second command is needed.
+ * A watched flake appeared or vanished. Only this module can say what the workspace as a
+ * whole now looks like: the menus' `when` clauses and the single status bar are shared by
+ * every folder, so one folder losing its flake does not mean the workspace has none.
  */
-function makeHost(): SessionHost {
-  return {
-    async chosen(session, picked) {
-      if (!picked) return;
-      const folder = session.workspaceFolder;
-      await reopenInDevShell(folder, picked.value, flakeDir(folder, readConfig(folder)));
-    },
-  };
+async function flakeChanged(): Promise<void> {
+  await setContexts();
+
+  // A devShell window's status is owned by `activate` and left alone.
+  if (!inDevShellWindow()) {
+    statusBar.set(anyFlake() ? { kind: "unset" } : { kind: "idle" });
+  }
 }
 
-export async function activate(context: vscode.ExtensionContext): Promise<void> {
+/** True while at least one tracked folder actually has a flake.nix on disk. */
+function anyFlake(): boolean {
+  for (const session of sessions.values()) if (session.hasFlake()) return true;
+  return false;
+}
+
+export async function activate(
+  context: vscode.ExtensionContext,
+): Promise<void> {
   context.subscriptions.push(initLog());
 
   registerResolver(context);
@@ -51,7 +62,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   statusBar = new StatusBar();
   context.subscriptions.push(statusBar);
 
-  host = makeHost();
   syncSessions(context);
   await setContexts();
 
@@ -72,20 +82,40 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }),
 
+    // Only a devShell window has a devShell to select: it is the one this window is
+    // running in, and the authority registry is what says which flake and folder it came
+    // from. Picking one from a local window means opening a window against it, which is
+    // `Reopen in devShell` and nothing else.
     vscode.commands.registerCommand("nixDevelop.selectDevShell", async () => {
-      // Inside a devShell window there are no local folders to build a session from; the
-      // authority registry is what says which flake and folder this window came from.
-      if (inDevShellWindow()) {
-        await switchDevShellInRemoteWindow(context);
+      if (!inDevShellWindow()) {
+        void vscode.window.showInformationMessage(
+          "This window is not running inside a devShell — use “Reopen in devShell” to open one.",
+        );
         return;
       }
-      const session = await resolveSession("Select a devShell for which folder?");
-      if (!session) return;
-      const picked = await session.promptForDevShell();
-      if (picked) await host.chosen(session, picked);
+      await switchDevShellInRemoteWindow(context);
     }),
 
+    vscode.commands.registerCommand("nixDevelop.reopenInDevShell", async () => {
+      const folder = await pickFolder("Reopen which folder in a devShell?");
+      if (!folder) return;
 
+      const session = sessions.get(folder.uri.toString());
+      if (!session?.hasFlake()) {
+        // Previously this returned silently, leaving the command looking broken.
+        void vscode.window.showWarningMessage(
+          `No flake.nix was found for ${folder.name}. Check nixDevelop.flakeDirectory.`,
+        );
+        return;
+      }
+      const picked = await session.promptForDevShell();
+      if (!picked) return;
+      await reopenInDevShell(
+        folder,
+        picked.value,
+        flakeDir(folder, readConfig(folder)),
+      );
+    }),
 
     vscode.commands.registerCommand("nixDevelop.showEnvironment", async () => {
       if (!inDevShellWindow()) {
@@ -99,27 +129,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     vscode.commands.registerCommand("nixDevelop.showLog", () => log.show()),
 
-    vscode.commands.registerCommand("nixDevelop.reopenInDevShell", async () => {
-      const folder = await pickFolder("Reopen which folder in a devShell?");
-      if (!folder) return;
-
-      const session = sessions.get(folder.uri.toString());
-      if (!session) {
-        // Previously this returned silently, leaving the command looking broken.
-        void vscode.window.showWarningMessage(
-          `No flake.nix was found for ${folder.name}. Check nixDevelop.flakeDirectory.`,
-        );
-        return;
-      }
-      const picked = await session.promptForDevShell();
-      if (!picked) return;
-      await reopenInDevShell(folder, picked.value, flakeDir(folder, readConfig(folder)));
-    }),
-
-    vscode.commands.registerCommand("nixDevelop.reopenLocally", () => reopenLocally()),
+    vscode.commands.registerCommand("nixDevelop.reopenLocally", () =>
+      reopenLocally(),
+    ),
 
     vscode.commands.registerCommand("nixDevelop.remoteExtensions", () =>
       showRemoteExtensions(context),
+    ),
+
+    vscode.commands.registerCommand("nixDevelop.restartDevShell", () =>
+      restartDevShellWindow(context),
     ),
 
     vscode.commands.registerCommand("nixDevelop.killServer", async () => {
@@ -139,20 +158,36 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // NIX_DEVELOP_SHELL is set on the *remote* extension host; this extension is a UI
     // extension, so the name comes out of the authority itself.
     const target = decodeAuthority(authority);
-    statusBar.set({
+    const active: StatusState = {
       kind: "active",
       label: target?.devShell ?? "devShell",
       summary: "the extension host is running inside this devShell",
-    });
+    };
+    statusBar.set(active);
+    // The shell this window runs in was built when the window opened. Editing the flake
+    // afterwards leaves every terminal and language server on the old toolchain, so the
+    // window has to say so -- and offer the reload that is the only way to pick it up.
+    context.subscriptions.push(watchDevShellFlake(context, statusBar, active));
     void offerExtensionSync(context).catch((err) => log.error(err as Error));
     return;
   }
 
+  // A window that is here because a devShell could not be built has a file waiting to be
+  // opened at the position Nix complained about. Awaited, because whether there was one
+  // decides how the sessions below announce themselves.
+  const recovering = await openPendingFile(context).catch((err) => {
+    log.error(err as Error);
+    return false;
+  });
+
   // Fire-and-forget: this shows the status bar and may offer the picker, neither of which
   // should hold up the rest of the window. `nixDevelop.promptWhenUnset` is what silences
-  // the offer for a workspace that does not want it.
+  // the offer for a workspace that does not want it -- and so does a flake that has just
+  // failed to evaluate, where offering to pick a devShell is offering the thing that broke.
   for (const session of sessions.values()) {
-    void session.activate().catch((err) => log.error(err as Error));
+    void session
+      .activate({ silent: recovering })
+      .catch((err) => log.error(err as Error));
   }
 }
 
@@ -181,18 +216,30 @@ function registerResolver(context: vscode.ExtensionContext): void {
         new NixDevelopResolver(context),
       ),
     );
-    context.subscriptions.push(...registerResourceLabelFormatter(api))
+    context.subscriptions.push(...registerResourceLabelFormatter(api));
 
     setResolverAvailable(true);
-    log.info(`registered remote authority resolver for '${AUTHORITY_PREFIX}+*'`);
+    log.info(
+      `registered remote authority resolver for '${AUTHORITY_PREFIX}+*'`,
+    );
   } catch (err) {
-    log.error(`registering the remote authority resolver failed: ${(err as Error).message}`);
+    log.error(
+      `registering the remote authority resolver failed: ${(err as Error).message}`,
+    );
   }
 }
 
 async function setContexts(): Promise<void> {
-  await vscode.commands.executeCommand("setContext", `${SECTION}.hasFlake`, sessions.size > 0);
-  await vscode.commands.executeCommand("setContext", `${SECTION}.inDevShell`, inDevShellWindow());
+  await vscode.commands.executeCommand(
+    "setContext",
+    `${SECTION}.hasFlake`,
+    anyFlake(),
+  );
+  await vscode.commands.executeCommand(
+    "setContext",
+    `${SECTION}.inDevShell`,
+    inDevShellWindow(),
+  );
 }
 
 function syncSessions(context: vscode.ExtensionContext): void {
@@ -206,12 +253,21 @@ function syncSessions(context: vscode.ExtensionContext): void {
     // This extension runs on the UI side, so in a remote window the folder URIs are not
     // local paths and none of the local filesystem logic applies.
     if (folder.uri.scheme !== "file") continue;
-    const session = new DevShellSession(context, folder, statusBar, host);
-    if (!session.hasFlake()) {
-      session.dispose();
-      continue;
-    }
-    log.info(`tracking flake in ${folder.uri.fsPath}`);
+    // Kept even when the folder has no flake.nix yet: a session is little more than a file
+    // watcher, and dropping the ones without a flake is what left nothing watching for a
+    // flake appearing. `hasFlake()` is what decides whether a session has anything to
+    // offer; see `anyFlake`.
+    const session = new DevShellSession(
+      context,
+      folder,
+      statusBar,
+      flakeChanged,
+    );
+    log.info(
+      session.hasFlake()
+        ? `tracking flake in ${folder.uri.fsPath}`
+        : `watching ${folder.uri.fsPath} for a flake.nix`,
+    );
     sessions.set(key, session);
   }
 
@@ -227,44 +283,23 @@ function disposeSessions(): void {
   sessions.clear();
 }
 
-/**
- * Most workspaces have exactly one flake; only ask which folder when that is genuinely
- * ambiguous, preferring the folder of the active editor.
- */
-async function resolveSession(prompt: string): Promise<DevShellSession | undefined> {
-  if (sessions.size === 0) {
-    void vscode.window.showWarningMessage("No flake.nix found in this workspace.");
-    return undefined;
-  }
-  if (sessions.size === 1) return [...sessions.values()][0];
-
-  const activeUri = vscode.window.activeTextEditor?.document.uri;
-  if (activeUri) {
-    const folder = vscode.workspace.getWorkspaceFolder(activeUri);
-    const session = folder && sessions.get(folder.uri.toString());
-    if (session) return session;
-  }
-
-  const picked = await vscode.window.showQuickPick(
-    [...sessions.values()].map((s) => ({
-      label: s.workspaceFolder.name,
-      description: s.workspaceFolder.uri.fsPath,
-      session: s,
-    })),
-    { title: prompt, placeHolder: "Workspace folder" },
+async function pickFolder(
+  prompt: string,
+): Promise<vscode.WorkspaceFolder | undefined> {
+  const local = (vscode.workspace.workspaceFolders ?? []).filter(
+    (f) => f.uri.scheme === "file",
   );
-  return picked?.session;
-}
-
-async function pickFolder(prompt: string): Promise<vscode.WorkspaceFolder | undefined> {
-  const local = (vscode.workspace.workspaceFolders ?? []).filter((f) => f.uri.scheme === "file");
   if (local.length === 0) {
     void vscode.window.showWarningMessage("No local folder is open.");
     return undefined;
   }
   if (local.length === 1) return local[0];
   const picked = await vscode.window.showQuickPick(
-    local.map((f) => ({ label: f.name, description: path.dirname(f.uri.fsPath), folder: f })),
+    local.map((f) => ({
+      label: f.name,
+      description: path.dirname(f.uri.fsPath),
+      folder: f,
+    })),
     { title: prompt, placeHolder: "Workspace folder" },
   );
   return picked?.folder;

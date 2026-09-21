@@ -47,6 +47,11 @@ export async function run(): Promise<void> {
   const banned = [
     { name: "NUL", code: 0x0000, escape: "\\u0000" },
     { name: "U+FFFD", code: 0xfffd, escape: "\\uFFFD" },
+    // ESC does not make a file look binary, but it is invisible in an editor and this
+    // codebase writes plenty of it now that it renders Nix's output. A tool that takes its
+    // input as JSON turns the escape into the character without anyone asking, which is
+    // exactly how the three that were here got here.
+    { name: "ESC", code: 0x001b, escape: "\\u001b" },
   ];
 
   for (const { name, code, escape } of banned) {
@@ -61,7 +66,7 @@ export async function run(): Promise<void> {
       }
       ok(
         guilty.length === 0,
-        `a literal ${name} makes grep skip the whole file: ${guilty.join(", ")}`,
+        `a literal ${name} does not belong in source; write "${escape}": ${guilty.join(", ")}`,
       );
     });
   }

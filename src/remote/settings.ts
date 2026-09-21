@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { NixDevelopConfig, SettingsMap } from "../config";
+import type { SettingsMap } from "../config";
 import { log } from "../utils/log";
 
 /**
@@ -12,24 +12,20 @@ import { log } from "../utils/log";
  * `python.defaultInterpreterPath` -- and the setting is then as reproducible as the
  * toolchain it names.
  *
- * Two ways to declare them, mirroring `vscodeExtensions`:
+ * They are declared by the devShell itself, mirroring `vscodeExtensions`: a `vscodeSettings`
+ * attribute on `mkShell`. Derivation attributes are strings, so an attrset has to be
+ * spelled as JSON:
  *
- *  1. `nixDevelop.remote.settings` in workspace settings -- the per-checkout tweak, and the
- *     winner when both name the same key.
+ *     pkgs.mkShell {
+ *       packages = [ pkgs.nil ];
+ *       vscodeSettings = builtins.toJSON {
+ *         "nix.serverPath" = "${pkgs.nil}/bin/nil";
+ *         "nix.enableLanguageServer" = true;
+ *       };
+ *     }
  *
- *  2. The devShell itself, through a `vscodeSettings` attribute on `mkShell`. Derivation
- *     attributes are strings, so an attrset has to be spelled as JSON:
- *
- *         pkgs.mkShell {
- *           packages = [ pkgs.nil ];
- *           vscodeSettings = builtins.toJSON {
- *             "nix.serverPath" = "${pkgs.nil}/bin/nil";
- *             "nix.enableLanguageServer" = true;
- *           };
- *         }
- *
- *     A `key=value` line per setting is accepted too, which is what a plain Nix list or a
- *     multi-line string yields.
+ * A `key=value` line per setting is accepted too, which is what a plain Nix list or a
+ * multi-line string yields.
  *
  * The values land in the *server's* machine settings file, which is per devShell for the
  * same reason the extension directory is: it lives under `--server-data-dir`. That is the
@@ -49,13 +45,6 @@ export const FLAKE_SETTINGS_VARS = ["vscodeSettings", "VSCODE_SETTINGS"];
  */
 const SETTING_KEY =
   /^(\[[A-Za-z0-9_+#.-]+\]|[A-Za-z0-9][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)+)$/;
-
-export interface SettingsSources {
-  /** From `nixDevelop.remote.settings`. */
-  fromSettings: SettingsMap;
-  /** From the devShell's own environment. */
-  fromFlake: SettingsMap;
-}
 
 /**
  * Parse one `vscodeSettings` value.
@@ -131,27 +120,15 @@ function validate(values: SettingsMap, source: string): SettingsMap {
   return out;
 }
 
-export function collectSettings(
-  cfg: NixDevelopConfig,
-  devShellEnv: Record<string, string>,
-): SettingsSources {
-  const fromFlake: SettingsMap = {};
-  if (cfg.remote.settingsFromFlake) {
-    for (const name of FLAKE_SETTINGS_VARS) {
-      const raw = devShellEnv[name];
-      if (!raw) continue;
-      Object.assign(fromFlake, parseFlakeSettings(raw, name));
-    }
+/** The settings the devShell declares, with later variables winning over earlier ones. */
+export function collectSettings(devShellEnv: Record<string, string>): SettingsMap {
+  const values: SettingsMap = {};
+  for (const name of FLAKE_SETTINGS_VARS) {
+    const raw = devShellEnv[name];
+    if (!raw) continue;
+    Object.assign(values, parseFlakeSettings(raw, name));
   }
-  return { fromSettings: validate(cfg.remote.settings ?? {}, "nixDevelop.remote.settings"), fromFlake };
-}
-
-/**
- * Workspace settings win: the flake describes the devShell in general, while
- * `nixDevelop.remote.settings` is what this checkout says about it.
- */
-export function mergedSettings(sources: SettingsSources): SettingsMap {
-  return { ...sources.fromFlake, ...sources.fromSettings };
+  return values;
 }
 
 /**

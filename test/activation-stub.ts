@@ -14,7 +14,99 @@ export const recorded = {
   resolverPrefix: undefined as string | undefined,
   labelFormatter: false,
   infoMessages: [] as string[],
+  terminals: [] as FakeTerminal[],
+  watchers: [] as FileSystemWatcher[],
+  executed: [] as string[],
+  openedDocuments: [] as unknown[],
+  shownDocuments: [] as { doc: unknown; options?: unknown }[],
+  errorMessages: [] as { message: string; modal: boolean; items: string[] }[],
 };
+
+/**
+ * What the user "clicks". A modal the real editor shows returns `undefined` unless a test
+ * says otherwise, which is what keeps every other test's activation from taking an action.
+ */
+export const answers = {
+  errorMessage: undefined as
+    | ((message: string, items: string[]) => string | undefined)
+    | undefined,
+};
+
+export class EventEmitter<T> {
+  private listeners: ((value: T) => void)[] = [];
+  readonly event = (listener: (value: T) => void) => {
+    this.listeners.push(listener);
+    return {
+      dispose: () => {
+        this.listeners = this.listeners.filter((l) => l !== listener);
+      },
+    };
+  };
+  fire(value: T): void {
+    for (const l of [...this.listeners]) l(value);
+  }
+  /** How many handlers are attached; lets a test see that a subscription was made. */
+  count(): number {
+    return this.listeners.length;
+  }
+  dispose(): void {
+    this.listeners = [];
+  }
+}
+
+interface FakePty {
+  onDidWrite: (listener: (s: string) => void) => { dispose(): void };
+  open?: (dims?: { columns: number; rows: number }) => void;
+  setDimensions?: (dims: { columns: number; rows: number }) => void;
+  close?: () => void;
+}
+
+/**
+ * A terminal that does not render, so a test can decide when it starts to.
+ *
+ * `BuildTerminal` holds its output until VS Code attaches a renderer, and the order there
+ * is what makes the replay work: the real editor subscribes to `onDidWrite` and only then
+ * calls `open()`. `attach()` reproduces exactly that.
+ */
+export class FakeTerminal {
+  output: string[] = [];
+  shown = 0;
+  preserveFocus: boolean | undefined;
+  disposed = false;
+
+  constructor(public options: { name: string; pty: FakePty }) {
+    recorded.terminals.push(this);
+  }
+
+  attach(columns = 80, rows = 24): void {
+    this.options.pty.onDidWrite((s) => this.output.push(s));
+    this.options.pty.open?.({ columns, rows });
+  }
+
+  /** What VS Code does when the user drags the panel wider. */
+  resize(columns: number, rows: number): void {
+    this.options.pty.setDimensions?.({ columns, rows });
+  }
+
+  /** What the user sees, with the escape codes the terminal would have consumed removed. */
+  text(): string {
+    return this.output.join("").replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "");
+  }
+
+  closedByUser(): void {
+    this.options.pty.close?.();
+  }
+
+  show(preserveFocus?: boolean): void {
+    this.shown++;
+    this.preserveFocus = preserveFocus;
+  }
+  sendText(): void {}
+  dispose(): void {
+    this.disposed = true;
+    this.options.pty.close?.();
+  }
+}
 
 class Channel {
   trace(): void {}
@@ -39,17 +131,37 @@ class StatusBarItem {
   dispose(): void {}
 }
 
-class FileSystemWatcher {
-  onDidChange(): { dispose(): void } {
-    return { dispose() {} };
+/**
+ * A watcher a test can fire events at.
+ *
+ * The no-op it used to be meant `watchFlake` was never executed by anything, which is how
+ * a watcher that reacted to nothing stayed that way.
+ */
+export class FileSystemWatcher {
+  readonly changed = new EventEmitter<{ fsPath: string }>();
+  readonly created = new EventEmitter<{ fsPath: string }>();
+  readonly deleted = new EventEmitter<{ fsPath: string }>();
+  disposed = false;
+
+  constructor(public pattern?: unknown) {
+    recorded.watchers.push(this);
   }
-  onDidCreate(): { dispose(): void } {
-    return { dispose() {} };
+
+  onDidChange(listener: (uri: { fsPath: string }) => void): { dispose(): void } {
+    return this.changed.event(listener);
   }
-  onDidDelete(): { dispose(): void } {
-    return { dispose() {} };
+  onDidCreate(listener: (uri: { fsPath: string }) => void): { dispose(): void } {
+    return this.created.event(listener);
   }
-  dispose(): void {}
+  onDidDelete(listener: (uri: { fsPath: string }) => void): { dispose(): void } {
+    return this.deleted.event(listener);
+  }
+  dispose(): void {
+    this.disposed = true;
+    this.changed.dispose();
+    this.created.dispose();
+    this.deleted.dispose();
+  }
 }
 
 export class ThemeIcon {
@@ -60,6 +172,18 @@ export class ThemeColor {
 }
 export class MarkdownString {
   constructor(public value?: string) {}
+}
+export class Position {
+  constructor(
+    public line: number,
+    public character: number,
+  ) {}
+}
+export class Range {
+  constructor(
+    public start: Position,
+    public end: Position,
+  ) {}
 }
 export class RelativePattern {
   constructor(
@@ -107,9 +231,12 @@ export const workspace = {
   }),
   onDidChangeWorkspaceFolders: () => ({ dispose() {} }),
   onDidChangeConfiguration: () => ({ dispose() {} }),
-  createFileSystemWatcher: () => new FileSystemWatcher(),
+  createFileSystemWatcher: (pattern?: unknown) => new FileSystemWatcher(pattern),
   getWorkspaceFolder: () => undefined,
-  openTextDocument: async () => ({}),
+  openTextDocument: async (arg: unknown) => {
+    recorded.openedDocuments.push(arg);
+    return { uri: arg };
+  },
   registerRemoteAuthorityResolver: (prefix: string) => {
     recorded.resolverPrefix = prefix;
     return { dispose() {} };
@@ -123,16 +250,30 @@ export const workspace = {
 export const window = {
   createOutputChannel: () => new Channel(),
   createStatusBarItem: () => new StatusBarItem(),
-  createTerminal: () => ({ show() {}, sendText() {} }),
+  createTerminal: (options: { name: string; pty: FakePty }) => new FakeTerminal(options),
   showInformationMessage: async (m: string) => {
     recorded.infoMessages.push(m);
     return undefined;
   },
   showWarningMessage: async () => undefined,
-  showErrorMessage: async () => undefined,
+  // The real signature is `(message, options?, ...items)`, so a `MessageOptions` may sit
+  // between the message and the buttons. Splitting it off here keeps `items` the list of
+  // actions the user is actually offered, whichever overload the caller reached for.
+  showErrorMessage: async (
+    message: string,
+    ...rest: (string | { modal?: boolean })[]
+  ) => {
+    const options = typeof rest[0] === "object" ? rest[0] : undefined;
+    const items = (options ? rest.slice(1) : rest) as string[];
+    recorded.errorMessages.push({ message, modal: options?.modal === true, items });
+    return answers.errorMessage?.(message, items);
+  },
   showQuickPick: async () => undefined,
   showInputBox: async () => undefined,
-  showTextDocument: async () => ({}),
+  showTextDocument: async (doc: unknown, options?: unknown) => {
+    recorded.shownDocuments.push({ doc, options });
+    return {};
+  },
   withProgress: async <T>(_o: unknown, task: (p: unknown, t: unknown) => Promise<T>) =>
     task({ report() {} }, { onCancellationRequested: () => ({ dispose() {} }) }),
   activeTextEditor: undefined,
@@ -144,6 +285,7 @@ export const commands = {
     return { dispose() {} };
   },
   executeCommand: async (id: string, ...args: unknown[]) => {
+    recorded.executed.push(id);
     if (id === "setContext") recorded.contexts[String(args[0])] = args[1];
     return undefined;
   },

@@ -12,13 +12,11 @@ import {
   collectExtensions,
   extensionsDirFor,
   installedIn,
-  mergedExtensions,
 } from "../src/remote/extensions";
 import {
   applyMachineSettings,
   collectSettings,
   machineSettingsPath,
-  mergedSettings,
   parseFlakeSettings,
   parseJsonc,
 } from "../src/remote/settings";
@@ -35,11 +33,8 @@ const cfg: NixDevelopConfig = {
   nixPath: "nix",
   buildTimeoutSeconds: 1800,
   profile: "persistent",
+  showBuildOutput: "onFailure",
   remote: {
-    extensions: [],
-    extensionsFromFlake: true,
-    settings: {},
-    settingsFromFlake: true,
     serverDownloadUrl: "https://example.invalid/${commit}/${platform}",
     connectTimeoutSeconds: 180,
     patchServerLd: true,
@@ -191,32 +186,30 @@ export async function run(): Promise<void> {
 
   await test("reads extension ids the flake declares via a list attribute", () => {
     // `mkShell { vscodeExtensions = [ "a.b" "c.d" ]; }` arrives space-separated.
-    const s = collectExtensions(cfg, { vscodeExtensions: "rust-lang.rust-analyzer tamasfe.even-better-toml" });
-    eq(s.fromFlake, ["rust-lang.rust-analyzer", "tamasfe.even-better-toml"]);
+    const ids = collectExtensions({ vscodeExtensions: "rust-lang.rust-analyzer tamasfe.even-better-toml" });
+    eq(ids, ["rust-lang.rust-analyzer", "tamasfe.even-better-toml"]);
   });
 
   await test("accepts comma separation and a pinned version", () => {
-    const s = collectExtensions(cfg, { vscodeExtensions: "golang.go, ms-python.python@2024.1.0" });
-    eq(s.fromFlake, ["golang.go", "ms-python.python@2024.1.0"]);
+    const ids = collectExtensions({ vscodeExtensions: "golang.go, ms-python.python@2024.1.0" });
+    eq(ids, ["golang.go", "ms-python.python@2024.1.0"]);
   });
 
   await test("rejects values that are not publisher.name ids", () => {
-    const s = collectExtensions(cfg, { vscodeExtensions: "not-an-id ok.good ../../evil" });
-    eq(s.fromFlake, ["ok.good"], "malformed entries must not reach --install-extension");
+    const ids = collectExtensions({ vscodeExtensions: "not-an-id ok.good ../../evil" });
+    eq(ids, ["ok.good"], "malformed entries must not reach --install-extension");
   });
 
-  await test("ignores flake-declared extensions when the setting is off", () => {
-    const s = collectExtensions({ ...cfg, remote: { ...cfg.remote, extensionsFromFlake: false } }, {
-      vscodeExtensions: "a.b",
-    });
-    eq(s.fromFlake, []);
+  await test("a devShell that declares nothing wants nothing installed", () => {
+    eq(collectExtensions({}), []);
   });
 
-  await test("merges settings and flake sources without duplicates", () => {
-    const s = collectExtensions({ ...cfg, remote: { ...cfg.remote, extensions: ["a.b", "x.y"] } }, {
+  await test("drops duplicates across the flake's extension variables", () => {
+    const ids = collectExtensions({
       vscodeExtensions: "a.b c.d",
+      VSCODE_EXTENSIONS: "c.d x.y",
     });
-    eq(mergedExtensions(s), ["a.b", "c.d", "x.y"]);
+    eq(ids, ["a.b", "c.d", "x.y"]);
   });
 
   await test("each devShell gets its own extensions directory", () => {
@@ -273,6 +266,42 @@ export async function run(): Promise<void> {
   await test("this machine is one of them", () => {
     ok(glibcLinkerName().startsWith("ld-linux-"), "the running arch must resolve");
   });
+
+  console.log("\nstopping a devShell server");
+
+  const { killServer } = await import("../src/remote/index");
+
+  /** Run the command in a window sitting at `authority`, against an empty storage dir. */
+  const kill = async (authority: string | undefined, folderUri: unknown) => {
+    const storage = await fs.mkdtemp(path.join(os.tmpdir(), "nd-kill-"));
+    const previous = stub.env.remoteAuthority;
+    stub.env.remoteAuthority = authority;
+    stub.recorded.executed.length = 0;
+    stub.recorded.infoMessages.length = 0;
+    try {
+      await killServer(
+        { globalStorageUri: { fsPath: storage } } as never,
+        folderUri ? ({ uri: folderUri } as never) : undefined,
+      );
+    } finally {
+      stub.env.remoteAuthority = previous;
+      await fs.rm(storage, { recursive: true, force: true });
+    }
+  };
+
+  await test("a window with no devShell behind it has nothing to stop", async () => {
+    await kill(undefined, undefined);
+    eq(stub.recorded.infoMessages, ["No devShell server is associated with this window."]);
+    ok(!stub.recorded.executed.includes("vscode.openFolder"), "and stays where it is");
+  });
+
+  await test("stopping this window's own server leaves the folder in a local window", async () => {
+    // That server was the window's extension host and the file system serving the
+    // checkout, so the command has to put the folder somewhere that can still show it.
+    const authority = authorityFor({ folder: "/w/proj", flakeDir: "/w/proj", devShell: "default" });
+    await kill(authority, stub.Uri.from({ scheme: "vscode-remote", authority, path: "/w/proj" }));
+    ok(stub.recorded.executed.includes("vscode.openFolder"), "the window was left with nothing");
+  });
 }
 
 export async function runFlakeRefs(): Promise<void> {
@@ -311,6 +340,117 @@ export async function runFlakeRefs(): Promise<void> {
 }
 
 /**
+ * Whether a failed resolve is worth another attempt. VS Code retries a
+ * `TemporarilyNotAvailable` on its own, so misreading a broken flake as transient is a
+ * loop, and misreading a flaky download as final costs a window that would have recovered.
+ */
+export async function runFailureClassification(): Promise<void> {
+  const { isEvaluationError, nixErrorSummary } = await import("../src/nix");
+
+  console.log("\nfailure classification");
+
+  await test("a missing devShell is final", () => {
+    ok(
+      isEvaluationError({
+        stderr:
+          "error: flake 'git+file:///w/proj' does not provide attribute " +
+          "'devShells.x86_64-linux.nope'",
+      }),
+      "no retry can conjure the attribute",
+    );
+  });
+
+  await test("a flake that does not parse is final", () => {
+    ok(
+      isEvaluationError({
+        stderr:
+          "error: syntax error, unexpected end of file, expecting '}'\n" +
+          "       at /w/proj/flake.nix:12:1:",
+      }),
+    );
+  });
+
+  await test("it reads Nix's drawn output too, bar and colours and all", () => {
+    ok(
+      isEvaluationError({
+        stderr:
+          "\u001b[32m\u2713\u001b[0m evaluating flake\r\u001b[K" +
+          "\u001b[31;1merror:\u001b[0m undefined variable 'mkShel'\r\n",
+      }),
+      "the pty path escapes and redraws the same message",
+    );
+  });
+
+  await test("an untracked flake.nix is final, since Nix never saw the file", () => {
+    ok(
+      isEvaluationError({
+        stderr:
+          "error: path '/w/proj/flake.nix' does not exist; " +
+          "does not contain a 'flake.nix'",
+      }),
+    );
+  });
+
+  await test("no flake.nix to evaluate at all is final", () => {
+    // Nix stops before it has a flake to fail in, so this one says nothing about
+    // attributes or syntax -- it is the plainest form of the same verdict.
+    ok(isEvaluationError({ stderr: "error: could not find a flake.nix file" }));
+  });
+
+  await test("a builder failure is retryable, whatever its log says", () => {
+    ok(
+      !isEvaluationError({
+        stderr:
+          "error: builder for '/nix/store/abc.drv' failed with exit code 1;\n" +
+          "       last 10 log lines:\n" +
+          "       > main.c:3:1: error: syntax error before '}' token",
+      }),
+      "a compiler saying 'syntax error' is not the flake failing to evaluate",
+    );
+  });
+
+  await test("a download that did not arrive is retryable", () => {
+    ok(
+      !isEvaluationError({
+        stderr: "error: unable to download 'https://cache.nixos.org/x.narinfo': Couldn't connect to server (7)",
+      }),
+    );
+  });
+
+  await test("a timed-out build is retryable", () => {
+    ok(!isEvaluationError(new Error("Timed out after 300s")));
+  });
+
+  await test("the server's own exit message carries the evaluation failure with it", () => {
+    // What the resolver actually catches when the capture is switched off: the failure
+    // reaches it wrapped in the message `awaitListening` rejects with.
+    ok(
+      isEvaluationError(
+        new Error(
+          "the server exited with code 1 before listening.\n" +
+            "error: attribute 'devShells' missing\n       at /w/proj/flake.nix:4:5",
+        ),
+      ),
+    );
+  });
+
+  await test("the summary is one line, starting at what Nix complained about", () => {
+    const summary = nixErrorSummary({
+      stderr:
+        "warming up\nerror:\n       \u2026 while evaluating the attribute 'devShells'\n" +
+        "       error: attribute 'mkShel' missing",
+    });
+    ok(summary?.startsWith("error:"), `expected it to start at the error, got: ${summary}`);
+    ok(!summary?.includes("\n"), "a dialog shows one line, not a log");
+    ok(summary?.includes("attribute 'mkShel' missing"), "the cause beneath the trace is the point");
+  });
+
+  await test("nothing to summarise is nothing, not an empty string", () => {
+    eq(nixErrorSummary(new Error("the server did not report a listening port")), undefined);
+  });
+}
+
+/**
  * `nix develop` is invoked from two places that run it very differently. These pin the one
  * builder both go through, so a flag can only ever be added or dropped in one place.
  */
@@ -329,6 +469,14 @@ export async function runNixCommands(): Promise<void> {
   await test("nixPath chooses the executable", () => {
     eq(nixCommand({ ...cfg, nixPath: "/run/current-system/sw/bin/nix" }, ["eval"], []).exe,
       "/run/current-system/sw/bin/nix");
+  });
+
+  await test("--log-format goes before the subcommand, where Nix will accept it", () => {
+    // Top-level, like the feature flags: `nix develop --log-format bar` is a different
+    // parser and rejects it. Absent unless asked for, so nothing else changes format.
+    eq(nixCommand(cfg, ["develop"], ["/w#dev"], { logFormat: "bar-with-logs" }).args,
+      [...features, "--log-format", "bar-with-logs", "develop", "/w#dev"]);
+    eq(nixCommand(cfg, ["develop"], ["/w#dev"]).args, [...features, "develop", "/w#dev"]);
   });
 
   await test("--impure goes after the subcommand, where Nix will accept it", () => {
@@ -388,6 +536,26 @@ export async function runNixCommands(): Promise<void> {
       false,
       "a mode that roots nothing must not create directories either",
     );
+  });
+
+  await test("a streamed build asks Nix for its progress bar and full logs", async () => {
+    const { args } = await developCommand(cfg, {
+      installable: "/w#dev",
+      profile: undefined,
+      command: ["bash", "-c", "true"],
+      logFormat: "bar-with-logs",
+    });
+    eq(args, [
+      ...features,
+      "--log-format",
+      "bar-with-logs",
+      "develop",
+      "/w#dev",
+      "--command",
+      "bash",
+      "-c",
+      "true",
+    ]);
   });
 
   await test("extraArgs and impure reach nix develop, ahead of the inner command", async () => {
@@ -947,18 +1115,16 @@ export async function runFlakeSettings(): Promise<void> {
     eq(parseFlakeSettings("[1,2]"), {}, "an array is not a settings object either");
   });
 
-  await test("ignores flake-declared settings when the setting is off", () => {
-    const s = collectSettings({ ...cfg, remote: { ...cfg.remote, settingsFromFlake: false } }, {
-      vscodeSettings: '{"a.b":1}',
-    });
-    eq(s.fromFlake, {});
+  await test("a devShell that declares nothing applies nothing", () => {
+    eq(collectSettings({}), {});
   });
 
-  await test("workspace settings win over the flake", () => {
-    const s = collectSettings({ ...cfg, remote: { ...cfg.remote, settings: { "a.b": "mine" } } }, {
-      vscodeSettings: '{"a.b":"flake","c.d":"flake"}',
+  await test("collects across the flake's settings variables", () => {
+    const values = collectSettings({
+      vscodeSettings: '{"a.b":"first","c.d":"flake"}',
+      VSCODE_SETTINGS: '{"a.b":"second"}',
     });
-    eq(mergedSettings(s), { "a.b": "mine", "c.d": "flake" });
+    eq(values, { "a.b": "second", "c.d": "flake" });
   });
 
   console.log("\nmachine settings file");

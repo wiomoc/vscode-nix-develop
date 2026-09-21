@@ -2,6 +2,114 @@
 
 ## Unreleased
 
+- **`Select devShell` is now only offered inside a devShell window.** In a local window it
+  did what `Reopen in devShell` does -- pick a folder, pick a shell, open a window against
+  it -- because that is the only thing choosing a devShell locally can mean: the window's
+  authority is the record of the choice, so there is nowhere else to put it. The two
+  commands were the same command. `Select devShell` now keeps only what is its own, which
+  is switching the shell the current devShell window runs in, and the status bar's
+  "no devShell selected" click goes to `Reopen in devShell`.
+
+- **Stopping a devShell server from inside its own window now leaves you in a local
+  window.** That server was the window's extension host, the file system serving the
+  checkout and every terminal in it, so stopping it left a window that could no longer read
+  the files it was displaying -- and the way out, `Reopen folder locally`, ran in the
+  extension host that had just been stopped. The command now reopens the folder locally
+  itself. Stopping some *other* devShell's server from a local window is unchanged: nothing
+  moves, since nothing in that window was depending on it.
+
+- **A devShell's extensions and editor settings are now declared only by the devShell.**
+  Four settings are gone: `nixDevelop.remote.extensions`, `remote.extensionsFromFlake`,
+  `remote.settings` and `remote.settingsFromFlake`. What a devShell needs is
+  `vscodeExtensions` and `vscodeSettings` on `mkShell`, or extension packages in
+  `packages`. The two workspace-settings equivalents were a second, weaker place to say the
+  same thing -- they could not be versioned with the shell, and, being `resource`-scoped,
+  they were read from user settings only, since the resolver runs before the workspace is
+  loaded; move what they held into the flake. With them gone, the two `*FromFlake` switches
+  only ever turned a whole feature off, which is what declaring nothing already does.
+
+- **A devShell window now says when its flake has moved on, and offers to restart.** The
+  shell a window runs in is built once, when the window opens; editing `flake.nix`
+  afterwards leaves every terminal, task and language server on the toolchain that was
+  there before the edit, and nothing said so -- which looks exactly like the extension
+  having ignored the change. Nothing was watching, either: the only flake watcher lived on
+  a per-folder session, and a devShell window has no local folders to build one from, so
+  its folders are `vscode-remote://` URIs and the session -- and with it the watcher --
+  never existed. The window now watches the flake directory its authority points at, which
+  is an ordinary local path on this side of the connection, and compares contents rather
+  than timestamps, so saving a file the editor did not change says nothing. On a real
+  change the status bar turns into a warning that stays until it is dealt with, and one
+  notification offers the restart. Editing the flake back to what the shell was built from
+  clears it again.
+
+- **New command: Nix Develop: Restart devShell server.** Stops this window's server and
+  reloads, which is what re-runs the resolver and rebuilds the shell. Reloading on its own
+  would not do it: a server outlives its window, so the reload would attach straight back
+  to the shell that is already running. This is also what the warning in the status bar
+  clicks through to.
+
+- **The flake watcher does something now.** It fired into a handler that cleared a cache
+  the picker rebuilds anyway -- and the cache is keyed on the mtime and size of `flake.nix`
+  and `flake.lock`, so clearing it changed nothing that the next stamp check would not have
+  changed by itself. Nothing else happened: no status bar update, no re-offer, despite the
+  comment above it promising one. It also never handled deletion, and the create it did
+  handle could not fire, because a folder without a `flake.nix` had its session disposed on
+  the spot and so had nothing watching it. Now a session is kept for every local folder --
+  it is little more than a watcher -- deletion and creation are both handled, the
+  `nixDevelop.hasFlake` context and the status bar are re-derived when either happens, and
+  a `flake.nix` appearing in a watched folder offers the picker the way one found at
+  startup does. Editing a flake still only invalidates the devShell list: the offer is made
+  when the flake appears, not on every save.
+
+- **A flake that does not evaluate now fails the window once, instead of forever.** Every
+  failed resolve was reported as `TemporarilyNotAvailable`, which is the code that asks VS
+  Code to come back and try again -- so a typo in `flake.nix` put the window in a loop,
+  re-running an evaluation that cannot succeed and scrolling the same error past each time,
+  until the user closed it. Nix's own vocabulary for giving up before anything is built --
+  a syntax error, an undefined variable, a missing attribute, no `flake.nix` at all -- is
+  now read as final, and what Nix said is what the window reports. A builder that failed, a
+  download that did not arrive, a port that never opened keep the retry they had: those are
+  the failures a second attempt can actually fix. The distinction is made on the output,
+  and a builder's log is checked first, so a compiler saying `syntax error` inside a build
+  is still a build failure.
+
+- **And it offers the way out: reopen locally, at the line that failed.** Reporting the
+  failure still left the user in a window that cannot open a single file -- a devShell
+  window's files are served by the server that never started -- with the flake they need to
+  edit on the other side of it. An evaluation failure now comes with one action that
+  reopens the folder in an ordinary local window and puts the cursor on the position Nix
+  named. The position is taken from Nix's trace innermost-first, so it lands on the
+  expression that actually failed rather than the `while evaluating the attribute` above
+  it, and frames that are not part of the checkout -- an error reached inside nixpkgs -- are
+  skipped, since their file is a read-only store path. Nix reports the *store copy* of a
+  flake in a Git work tree, so those paths are mapped back onto the checkout; when it named
+  no position at all, `flake.nix` is where the offer goes. The local window that comes back
+  stays quiet about picking a devShell: the user is there to fix the flake, not to choose a
+  shell again.
+
+- **You can watch the devShell build now.** Opening a window builds the shell first, and
+  that is where the minutes go and where a flake that does not evaluate fails -- but the
+  only thing the user ever saw of it was one line in a progress notification, and a failure
+  arrived as that same line, collapsed. `nix develop` now streams into a terminal named
+  after the devShell. Nothing of the extension's own is written into it -- no headers, no
+  status lines -- so what is on screen is what the same command prints in a shell. Nix is
+  asked for `--log-format bar-with-logs`, and given a terminal to write to, so what appears
+  is what `nix develop` prints in a shell -- progress bar redrawn in place, in colour, and
+  every line the builders print.
+- **The pty is borrowed from the editor, not depended on.** Nix colours its output and
+  draws its bar only when `isatty` says its stderr is a terminal, and nothing overrides
+  that -- no `--color`, no config key, no environment variable. Allocating one needs a
+  native module, and taking `node-pty` as a dependency would mean a prebuild per Electron
+  ABI that `vsce package --no-dependencies` would not ship regardless. VS Code has already
+  paid that cost for its own terminals, so the module is loaded out of
+  `<appRoot>/node_modules/node-pty`. Its binding is Node-API, so it is ABI-stable rather
+  than tied to one build of the editor, and nothing here requires it: a failure to load is
+  logged once and answered with a pipe, which costs colour and nothing else. The terminal's
+  width is passed through as well, and again on every resize, since Nix lays its bar out
+  for the width it was told about.
+- **`nixDevelop.showBuildOutput` decides when that terminal appears**: `always` (the
+  default) shows it as the build starts and leaves it, `onFailure` keeps it hidden and
+  closes it again unless the window fails to open, `never` collects nothing.
 - **The devShell's GC root is now the project's, and it stays.** It was written into the
   extension's global storage and deleted the moment the server using it exited, which meant
   every closed window handed a whole toolchain back to the next `nix store gc`: reopening

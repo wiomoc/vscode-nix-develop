@@ -76,6 +76,8 @@ export type StatusState =
   | { kind: "idle" }
   | { kind: "unset" }
   | { kind: "active"; label: string; summary: string }
+  /** Running inside a devShell whose flake has been edited since it was built. */
+  | { kind: "stale"; label: string; reason: string }
   | { kind: "error"; label: string; message: string };
 
 export class StatusBar implements vscode.Disposable {
@@ -99,7 +101,9 @@ export class StatusBar implements vscode.Disposable {
       case "unset":
         this.item.text = "$(package) devShell";
         this.item.tooltip = "No devShell selected — click to pick one";
-        this.item.command = "nixDevelop.selectDevShell";
+        // Only a local window is ever "unset", and there picking a devShell *is* opening a
+        // window in it.
+        this.item.command = "nixDevelop.reopenInDevShell";
         this.item.backgroundColor = undefined;
         break;
       case "active":
@@ -109,6 +113,19 @@ export class StatusBar implements vscode.Disposable {
         );
         this.item.command = "nixDevelop.selectDevShell";
         this.item.backgroundColor = undefined;
+        break;
+      case "stale":
+        // Warning rather than error: nothing is broken, the window is just running an
+        // older shell than the flake now describes. The click is the way out of that.
+        this.item.text = `$(warning) ${state.label}`;
+        this.item.tooltip = new vscode.MarkdownString(
+          `**Nix devShell out of date**\n\n\`${state.label}\`\n\n${state.reason}\n\n` +
+            `_Click to restart the devShell server._`,
+        );
+        this.item.command = "nixDevelop.restartDevShell";
+        this.item.backgroundColor = new vscode.ThemeColor(
+          "statusBarItem.warningBackground",
+        );
         break;
       case "error":
         this.item.text = `$(error) ${state.label}`;

@@ -10,14 +10,22 @@ export interface NixDevelopConfig {
   buildTimeoutSeconds: number;
   /** See `nixDevelop.profile`, and `ProfileMode` in `profile.ts`. */
   profile: "persistent" | "none";
+  /** See `nixDevelop.showBuildOutput`, and `BuildTerminal` in `utils/build-terminal.ts`. */
+  showBuildOutput: BuildOutputMode;
   remote: RemoteConfig;
 }
 
+/**
+ * When the terminal showing `nix develop` is brought into view.
+ *
+ * `never` is the only value that stops the output being collected at all; the other two
+ * differ in whether the terminal is revealed up front or only once there is a failure to
+ * read. The default is `onFailure`, because opening a window should not steal the panel,
+ * but a devShell that does not evaluate should not fail silently either.
+ */
+export type BuildOutputMode = "never" | "onFailure" | "always";
+
 export interface RemoteConfig {
-  extensions: string[];
-  extensionsFromFlake: boolean;
-  settings: SettingsMap;
-  settingsFromFlake: boolean;
   serverDownloadUrl: string;
   connectTimeoutSeconds: number;
   /**
@@ -45,11 +53,8 @@ export function readConfig(scope: vscode.WorkspaceFolder | undefined): NixDevelo
     nixPath: c.get<string>("nixPath", "nix") || "nix",
     buildTimeoutSeconds: c.get<number>("buildTimeoutSeconds", 1800),
     profile: c.get<"persistent" | "none">("profile", "persistent"),
+    showBuildOutput: c.get<BuildOutputMode>("showBuildOutput", "always"),
     remote: {
-      extensions: c.get<string[]>("remote.extensions", []),
-      extensionsFromFlake: c.get<boolean>("remote.extensionsFromFlake", true),
-      settings: c.get<SettingsMap>("remote.settings", {}),
-      settingsFromFlake: c.get<boolean>("remote.settingsFromFlake", true),
       // Empty means "ask the running product"; see `ServerManager.downloadUrl`.
       serverDownloadUrl: c.get<string>("remote.serverDownloadUrl", ""),
       connectTimeoutSeconds: c.get<number>("remote.connectTimeoutSeconds", 180),

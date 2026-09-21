@@ -137,7 +137,9 @@ is the extension's job, in three places, all idempotent:
 - `ServerManager.sweep`, at activation, across every devShell at once. This is what
   collects the servers that retired while no editor was running.
 - `findRunning`, when the lock it is about names a port nothing answers on.
-- `ServerManager.stop`, for an explicit `Stop devShell server`.
+- `ServerManager.stop`, for an explicit `Stop devShell server`. Run from inside the window
+  that server was backing, this also puts the folder back in a local window: the server was
+  that window's extension host and file system, so there is nothing left for it to show.
 
 None of them touch the devShell's GC root: a profile under `.vscode/nix-develop/` belongs
 to the project and outlives every server that enters it.
@@ -180,8 +182,7 @@ directory; switching to a `devShells.docs` that declares a Markdown toolchain ge
 different set, with no uninstalling in between.
 
 Ids are validated against `publisher.name[@version]` before they reach
-`--install-extension`, and a failed install warns rather than blocking the window. Turn the
-feature off with `nixDevelop.remote.extensionsFromFlake: false`.
+`--install-extension`, and a failed install warns rather than blocking the window.
 
 ### From Nix — pinned and prebuilt
 
@@ -215,15 +216,6 @@ Switching devShells from inside a devShell window also stops the server being le
 That window was its only client, and its extension host still has the previous shell's
 extensions activated; shutting it down releases it and guarantees the next visit starts from
 what the flake declares now.
-
-### In workspace settings
-
-The `devcontainer.json` equivalent, for per-checkout tweaks that do not belong in the
-flake:
-
-```jsonc
-{ "nixDevelop.remote.extensions": ["ms-python.python"] }
-```
 
 ### Which side an extension runs on
 
@@ -307,17 +299,8 @@ the settings UI — is left alone, and a key the flake *stops* declaring is remo
 the next open, so deleting a line from the flake actually takes effect. The file is only
 rewritten when the effective settings change, so hand-written comments survive.
 
-### In workspace settings
-
-The per-checkout tweak, and the winner when both name the same key:
-
-```jsonc
-{ "nixDevelop.remote.settings": { "nix.serverPath": "/run/current-system/sw/bin/nil" } }
-```
-
-Turn the flake side off with `nixDevelop.remote.settingsFromFlake: false`. Keys that do not
-look like settings keys are refused with a warning, and a malformed `vscodeSettings` costs
-the settings, not the window.
+Keys that do not look like settings keys are refused with a warning, and a malformed
+`vscodeSettings` costs the settings, not the window.
 
 `Nix Develop: Show devShell extensions (remote)` lists the machine settings file and the
 keys currently in it, alongside the extensions.

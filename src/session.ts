@@ -5,19 +5,20 @@ import * as vscode from "vscode";
 import { flakeDir, readConfig, type NixDevelopConfig } from "./config";
 import { detectDirenv } from "./direnv";
 import { log } from "./utils/log";
-import { currentSystem, type DevShell, listDevShells, primeCurrentSystem } from "./nix";
+import {
+  currentSystem,
+  type DevShell,
+  listDevShells,
+  primeCurrentSystem,
+} from "./nix";
 import { pickDevShell, type Selection, StatusBar } from "./ui";
 import { exists } from "./utils/fs-stat";
+import { reopenInDevShell } from "./remote";
 
 const SYSTEM_KEY = "nixDevelop.currentSystem";
 
-/**
- * How a session reports decisions that only the extension host can act on. A session knows
- * which devShell was chosen; only the host can open a window against it.
- */
-export interface SessionHost {
-  chosen(session: DevShellSession, picked: Selection): Promise<void>;
-}
+/** How long the flake has to sit still before its change is acted on. */
+export const FLAKE_DEBOUNCE_MS = 750;
 
 /**
  * Tracks the devShell selection for one workspace folder.
@@ -32,13 +33,23 @@ export class DevShellSession implements vscode.Disposable {
   /** devShell names, keyed on the flake files they were derived from. */
   private shellCache?: { stamp: string; shells: DevShell[] };
   private warnedSlow = false;
+  /** Whether `flake.nix` was there last time we looked; see `flakeChanged`. */
+  private flakePresent: boolean;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly folder: vscode.WorkspaceFolder,
     private readonly status: StatusBar,
-    private readonly host: SessionHost,
+    /**
+     * Called when this folder gained or lost its `flake.nix`.
+     *
+     * The session knows that its own state went stale, but which folders count as having a
+     * flake -- the `when`-clause contexts the menus read, and the status bar shared by every
+     * folder -- is the extension host's to re-derive.
+     */
+    private readonly onFlakeChanged: () => Promise<void>,
   ) {
+    this.flakePresent = this.hasFlake();
     this.watchFlake();
   }
 
@@ -62,7 +73,10 @@ export class DevShellSession implements vscode.Disposable {
    * The Nix system double, persisted across windows. It cannot change for a given machine,
    * and resolving it costs a Nix process on the path to showing the picker.
    */
-  private async system(cfg: NixDevelopConfig, token?: vscode.CancellationToken): Promise<string> {
+  private async system(
+    cfg: NixDevelopConfig,
+    token?: vscode.CancellationToken,
+  ): Promise<string> {
     if (this.systemCache) return this.systemCache;
     primeCurrentSystem(this.context.globalState.get<string>(SYSTEM_KEY));
     this.systemCache = await currentSystem(cfg, this.dir(), token);
@@ -99,7 +113,9 @@ export class DevShellSession implements vscode.Disposable {
     );
 
     const elapsed = Date.now() - started;
-    log.info(`evaluated devShells in ${elapsed}ms: ${shells.map((s) => s.name).join(", ")}`);
+    log.info(
+      `evaluated devShells in ${elapsed}ms: ${shells.map((s) => s.name).join(", ")}`,
+    );
     if (elapsed > 5000) await this.warnSlowEvaluation(elapsed);
 
     this.shellCache = { stamp, shells };
@@ -133,7 +149,9 @@ export class DevShellSession implements vscode.Disposable {
     const hint = inGit
       ? "Make sure flake.nix and flake.lock are tracked by Git, so Nix can ignore untracked build directories."
       : `${dir} is not a Git repository, so Nix hashes every file in it on each evaluation. Running 'git init' and tracking flake.nix makes this dramatically faster.`;
-    log.warn(`evaluating the flake took ${Math.round(elapsed / 1000)}s. ${hint}`);
+    log.warn(
+      `evaluating the flake took ${Math.round(elapsed / 1000)}s. ${hint}`,
+    );
     const choice = await vscode.window.showWarningMessage(
       `Evaluating this flake took ${Math.round(elapsed / 1000)}s.`,
       "Why?",
@@ -155,7 +173,9 @@ export class DevShellSession implements vscode.Disposable {
   async promptForDevShell(): Promise<Selection> {
     const cfg = this.cfg();
     if (!this.hasFlake()) {
-      void vscode.window.showWarningMessage(`No flake.nix found in ${this.dir()}.`);
+      void vscode.window.showWarningMessage(
+        `No flake.nix found in ${this.dir()}.`,
+      );
       return undefined;
     }
 
@@ -188,7 +208,14 @@ export class DevShellSession implements vscode.Disposable {
     );
     if (choice === "Select devShell") {
       const picked = await this.promptForDevShell();
-      if (picked) await this.host.chosen(this, picked);
+      if (picked) {
+        const folder = this.workspaceFolder;
+        await reopenInDevShell(
+          folder,
+          picked.value,
+          flakeDir(folder, readConfig(folder)),
+        );
+      }
     } else if (choice === "Never for this workspace") {
       await vscode.workspace
         .getConfiguration("nixDevelop", this.folder.uri)
@@ -198,23 +225,68 @@ export class DevShellSession implements vscode.Disposable {
 
   // -------------------------------------------------------------------- misc
 
-  /** Re-offer when the flake or its lock changes underneath us. */
+  /**
+   * React to the flake or its lock changing underneath us.
+   *
+   * Three things go stale when a flake is written: the cached devShell list, whether this
+   * folder has a flake at all -- `flake.nix` can be deleted, or appear in a folder that is
+   * already tracked -- and everything the host derives from that.
+   */
   private watchFlake(): void {
-    const pattern = new vscode.RelativePattern(this.folder, "**/flake.{nix,lock}");
+    // Folder-wide rather than bound to `dir()`, because `nixDevelop.flakeDirectory` can
+    // move which directory this session means without the watcher being rebuilt. Which
+    // directory an event has to be in is therefore decided when the event arrives.
+    const pattern = new vscode.RelativePattern(
+      this.folder,
+      "**/flake.{nix,lock}",
+    );
     const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+
     let debounce: NodeJS.Timeout | undefined;
-    const onChange = (uri: vscode.Uri) => {
-      if (path.dirname(uri.fsPath) !== this.dir()) return;
-      // The set of devShells may have changed.
-      this.shellCache = undefined;
+    const touched = new Set<string>();
+    const onEvent = (uri: vscode.Uri) => {
+      if (path.resolve(path.dirname(uri.fsPath)) !== path.resolve(this.dir()))
+        return;
+      touched.add(path.basename(uri.fsPath));
+      // `nix flake update` rewrites the lock in several steps, and saving a flake can be
+      // more than one event on its own, so settle before reacting to any of it.
       clearTimeout(debounce);
       debounce = setTimeout(() => {
-        log.info(`${path.basename(uri.fsPath)} changed; devShell list invalidated`);
-      }, 750);
+        const names = [...touched].sort().join(" and ");
+        touched.clear();
+        void this.flakeChanged(names).catch((err) => log.error(err as Error));
+      }, FLAKE_DEBOUNCE_MS);
     };
-    watcher.onDidChange(onChange);
-    watcher.onDidCreate(onChange);
-    this.disposables.push(watcher, { dispose: () => clearTimeout(debounce) });
+
+    this.disposables.push(
+      // The watcher owns these, but disposing them explicitly keeps the handler from
+      // running against a session the host has already dropped.
+      watcher.onDidChange(onEvent),
+      watcher.onDidCreate(onEvent),
+      watcher.onDidDelete(onEvent),
+      watcher,
+      { dispose: () => clearTimeout(debounce) },
+    );
+  }
+
+  /**
+   * The flake was written: drop what was derived from it and let the host catch up.
+   *
+   * The picker is only offered when the flake has just *appeared*. Offering on every edit
+   * would put a notification in front of anyone working on their flake.nix.
+   */
+  private async flakeChanged(names: string): Promise<void> {
+    this.shellCache = undefined;
+    const present = this.hasFlake();
+    const appeared = present && !this.flakePresent;
+    const vanished = !present && this.flakePresent;
+    this.flakePresent = present;
+
+    const what = appeared ? "appeared" : vanished ? "is gone" : "changed";
+    log.info(`${names} ${what} in ${this.dir()}; devShell list invalidated`);
+
+    await this.onFlakeChanged();
+    if (appeared) await this.activate();
   }
 
   dispose(): void {
