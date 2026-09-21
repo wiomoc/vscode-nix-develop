@@ -4,6 +4,11 @@ Open a workspace that has a `flake.nix`, pick a devShell, and VS Code uses it â€
 tasks, debuggers and language servers all get the toolchain `nix develop` would have given
 you.
 
+![A Rust workspace: clicking the status bar picks the flake's devShell, the window reopens with its server inside `nix develop`, and rust-analyzer, Even Better TOML and the settings pointing at the shell's own binaries come with it](docs/demo.gif)
+
+*The devShell above declares its own `rust-analyzer`, its own extensions and the settings
+that point the editor at them.*
+
 ## What it does
 
 1. On opening a workspace containing `flake.nix`, offers to pick a devShell.

@@ -7,10 +7,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-org/nix-develop-vscode-extension.git"
+    "url": "https://github.com/wiomoc/vscode-nix-develop.git"
   },
   "bugs": {
-    "url": "https://github.com/your-org/nix-develop-vscode-extension/issues"
+    "url": "https://github.com/wiomoc/vscode-nix-develop/issues"
   },
   "engines": {
     "vscode": "^1.85.0"
