@@ -229,6 +229,13 @@ launch_code() {
 
 launch_code --install-extension "$VSIX" --force >/dev/null
 
+# The window that opens first is an ordinary local one, and the file it opens
+# on is a flake: without a Nix grammar the opening frame is a wall of grey.
+# The devShell brings its own copy of this extension a few seconds later --
+# this one is only so there is something to read before it does.
+say "installing jnoortheen.nix-ide into the scratch profile"
+launch_code --install-extension jnoortheen.nix-ide --force >/dev/null
+
 # ------------------------------------------------------------- nested server
 
 pids=()
@@ -289,7 +296,7 @@ open_window() {
     [ "$(probe_workbench)" -gt 20 ] && break
     sleep 1
   done
-  sleep 5
+  sleep 3
 }
 
 close_window() {
@@ -325,15 +332,17 @@ wait_for_devshell_window() {
   return 1
 }
 
-# The take. Each beat is one thing the extension does, held long enough to read.
+# The take. Each beat is one thing the extension does, held long enough to read
+# and not a breath longer: the pauses are paced like someone who knows the
+# keystrokes, not like someone demonstrating them.
 drive() {
-  focus; "$XDOTOOL" mousemove 620 300; sleep 3
+  focus; "$XDOTOOL" mousemove 620 300; sleep 1.2
 
   # 1. the status bar says no devShell is active; clicking it offers one.
   #    Listing the devShells means evaluating the flake, so how long the picker
   #    takes to appear is not ours to predict -- wait for it, and click again if
   #    the first one was swallowed.
-  glide 84 $((HEIGHT - 11)); sleep 0.8
+  glide 84 $((HEIGHT - 11)); sleep 0.4
   for attempt in 1 2 3; do
     "$XDOTOOL" click 1
     for _ in $(seq 1 20); do
@@ -342,39 +351,41 @@ drive() {
     done
     [ "$attempt" = 3 ] && { echo "the devShell picker never opened" >&2; return 1; }
   done
-  sleep 1.5
+  sleep 1
 
   # 2. take `default`, the shell that declares its own editor tooling
   mark reopen
-  "$XDOTOOL" key Return; sleep 0.8
+  "$XDOTOOL" key Return; sleep 0.5
   "$XDOTOOL" mousemove 950 250
 
   # 3. the window comes back with its server running inside `nix develop`
   wait_for_devshell_window
-  sleep 10; focus; sleep 1
+  sleep 6; focus; sleep 0.8
   mark connected
 
   # 4. the code, with the language server the flake asked for: inlay hints,
   #    code lenses and `rust-analyzer` in the status bar
-  "$XDOTOOL" key ctrl+p; sleep 0.9; "$XDOTOOL" type --delay 60 "main.rs"; sleep 1.0
-  "$XDOTOOL" key Return; sleep 7
+  "$XDOTOOL" key ctrl+p; sleep 0.5; "$XDOTOOL" type --delay 45 "main.rs"; sleep 0.6
+  "$XDOTOOL" key Return; sleep 3.5
 
-  # 5. the settings the flake declared, as this window resolved them
-  "$XDOTOOL" key ctrl+shift+p; sleep 0.9
-  "$XDOTOOL" type --delay 50 "Open Remote Settings (JSON)"; sleep 1.6
-  "$XDOTOOL" key Return; sleep 5
-  "$XDOTOOL" key ctrl+w; sleep 1.5
+  # 5. the toolchain itself, in a terminal that is a child of that server --
+  #    and then out of the way again, so the settings get the whole window
+  "$XDOTOOL" key ctrl+shift+grave; sleep 2
+  "$XDOTOOL" type --delay 45 "cargo run"; sleep 0.4; "$XDOTOOL" key Return; sleep 3
+  "$XDOTOOL" key ctrl+grave; sleep 0.8
 
-  # 6. the toolchain itself, in a terminal that is a child of that server
-  "$XDOTOOL" key ctrl+shift+grave; sleep 6
-  "$XDOTOOL" type --delay 55 "cargo run"; sleep 0.6; "$XDOTOOL" key Return; sleep 4
+  # 6. the settings the flake declared, as this window resolved them
+  "$XDOTOOL" key ctrl+shift+p; sleep 0.6
+  "$XDOTOOL" type --delay 40 "Open Remote Settings (JSON)"; sleep 1.2
+  "$XDOTOOL" key Return; sleep 3.5
+  "$XDOTOOL" key ctrl+w; sleep 0.8
 
   # 7. and the extension set this devShell brought with it -- scrolled so the
   #    whole "DEVSHELL - INSTALLED" group is on screen, not just its first two
-  "$XDOTOOL" key ctrl+shift+x; sleep 3
-  glide 150 400; sleep 0.5
-  for _ in 1 2 3 4 5; do "$XDOTOOL" click 5; sleep 0.25; done
-  sleep 4
+  "$XDOTOOL" key ctrl+shift+x; sleep 2.5
+  glide 150 400; sleep 0.4
+  for _ in 1 2 3 4 5; do "$XDOTOOL" click 5; sleep 0.2; done
+  sleep 3
 }
 
 # A dress rehearsal first: it downloads the Marketplace extension into the
