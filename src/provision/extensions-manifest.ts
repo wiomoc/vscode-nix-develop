@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { log } from "../utils/log";
+import { log } from "./log";
 import type { NixExtension } from "./extensions";
 
 /**

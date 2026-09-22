@@ -42,6 +42,26 @@ export function glibcLinkerName(arch: string = process.arch): string {
 }
 
 /**
+ * The `node` a server distribution ships, given its launcher.
+ *
+ * The launcher resolves its own root as `dirname(dirname(readlink -f "$0"))` and runs
+ * `$ROOT/node`; the binary is the same one either way, so it is resolved the same way
+ * rather than by assuming where the launcher was found.
+ *
+ * Two things want it: this file, which points it at a glibc it can start against, and
+ * `ServerManager.start`, which runs `dist/provision.js` with it inside the devShell. A
+ * devShell is not obliged to have a `node` of its own, and if it has one it is the
+ * project's rather than the editor's -- so the one that is known to match the server is
+ * the one to use.
+ */
+export async function serverNodePath(launcher: string): Promise<string> {
+  return path.join(
+    path.dirname(path.dirname(await fs.realpath(launcher))),
+    "node",
+  );
+}
+
+/**
  * Give the server's bundled `node` a glibc it can actually start against.
  *
  * The server ships a `node` linked against the host's glibc via `/lib64/ld-linux`, which
@@ -78,13 +98,7 @@ export async function patchServerNode(
   launcher: string,
   dir: string,
 ): Promise<PatchedNode> {
-  // The launcher resolves its own root as `dirname(dirname(readlink -f "$0"))` and
-  // patches `$ROOT/node`; the binary is the same one either way, so resolve it the same
-  // way rather than assuming where the launcher was found.
-  const node = path.join(
-    path.dirname(path.dirname(await fs.realpath(launcher))),
-    "node",
-  );
+  const node = await serverNodePath(launcher);
 
   // `.out` is load-bearing: a bare `nixpkgs#glibc` resolves to glibc's *bin* output,
   // which has no `lib/ld-linux-*` at all. Patching against it leaves a `node` that

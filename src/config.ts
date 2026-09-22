@@ -38,9 +38,6 @@ export interface RemoteConfig {
   patchServerLd: boolean;
 }
 
-/** Editor settings, as they appear in a `settings.json`. */
-export type SettingsMap = Record<string, unknown>;
-
 export const SECTION = "nixDevShell";
 
 export function readConfig(scope: vscode.WorkspaceFolder | undefined): NixDevShellConfig {

@@ -5,21 +5,15 @@ import { ensureProfile } from "../profile";
 import { BuildTerminal } from "../utils/build-terminal";
 import { log } from "../utils/log";
 import {
-  captureEnv,
   currentSystem,
   isEvaluationError,
   nixErrorLocations,
   nixErrorSummary,
   toInstallable,
-  type CaptureResult,
 } from "../nix";
 import { offerLocalRecovery } from "./recover";
 import { decodeAuthority, storageKeyFor, type RemoteTarget } from "./authority";
-import {
-  extensionsDirFor,
-  installDeclaredExtensions,
-} from "../provision/extensions";
-import { applyDeclaredSettings } from "../provision/settings";
+import { extensionsDirFor } from "../provision/extensions";
 import { ServerManager } from "./server";
 import { patchServerNode as patchServerLd } from "./server-ld-patch";
 
@@ -174,6 +168,11 @@ export class NixDevShellResolver implements vscode.RemoteAuthorityResolver {
   /**
    * Build the devShell, prepare a server and start it inside the shell.
    *
+   * Everything Nix does happens in one call, at the bottom: `servers.start` enters the
+   * devShell exactly once, with `dist/provision.js` as its command. What is left here is
+   * what has to be true *before* the shell is entered -- a server on disk, a `node` that
+   * can start, the installable to build, and the directories this devShell owns.
+   *
    * Split from `startOrAttach` only so the terminal showing all of it has somewhere to be
    * created and disposed around a single call.
    */
@@ -188,9 +187,10 @@ export class NixDevShellResolver implements vscode.RemoteAuthorityResolver {
   }): Promise<vscode.ResolverResult> {
     const { cfg, target, commit, key, servers, progress, build } = opts;
 
-    progress("Preparing the VS Code server…");
+    progress("Preparing the VS Code server\u2026");
     const launcher = await servers.ensureServer(commit, progress);
-    // Before anything runs the launcher: installing extensions starts the same `node`.
+    // Before anything runs the launcher: the provisioning script runs on the same `node`,
+    // and it is the first thing the devShell will start.
     if (cfg.remote.patchServerLd) {
       await patchServerLd(cfg, launcher, target.flakeDir);
     } else {
@@ -205,37 +205,10 @@ export class NixDevShellResolver implements vscode.RemoteAuthorityResolver {
     const root = path.join(this.context.globalStorageUri.fsPath, "remote");
     const extensionsDir = extensionsDirFor(root, key);
     const serverDataDir = path.join(root, "data", key);
-    // One profile per devShell, shared by everything that enters it: reading the
-    // environment and running the server are the same shell, so they are the same GC root.
-    // It lives beside the project rather than in global storage, and it stays there --
-    // see `ensureProfile`. `undefined` is `nixDevShell.profile: none`, or a folder that
-    // could not be written to.
+    // One profile per devShell, shared by everything that enters it. It lives beside the
+    // project rather than in global storage, and it stays there -- see `ensureProfile`.
+    // `undefined` is `nixDevShell.profile: none`, or a folder that could not be written to.
     const profile = await ensureProfile(cfg, target.folder, target.devShell);
-
-    // One capture serves both: the extensions the devShell declares and the settings it
-    // declares are two attributes of the same shell.
-    const capture = await this.readDevShellEnv({
-      cfg,
-      target,
-      installable,
-      profile,
-      progress,
-      build,
-    });
-
-    await installDeclaredExtensions({
-      launcher,
-      extensionsDir,
-      serverDataDir,
-      flakeDir: target.flakeDir,
-      capture,
-      progress,
-    });
-
-    await applyDeclaredSettings({
-      serverDataDir,
-      devShellEnv: capture?.inside ?? {},
-    });
 
     const handle = await servers.start({
       key,
@@ -246,7 +219,20 @@ export class NixDevShellResolver implements vscode.RemoteAuthorityResolver {
       profile,
       extensionsDir,
       serverDataDir,
+      provisionScript: this.provisionScript(),
       progress,
+      output: build
+        ? {
+            onOutput: (chunk) => build.write(chunk),
+            // Nix draws for the terminal it is told about, so it is given this one: its
+            // width now, and its width again whenever the user resizes the panel.
+            tty: {
+              columns: build.dimensions?.columns,
+              rows: build.dimensions?.rows,
+              onResize: build.onDidChangeDimensions,
+            },
+          }
+        : {},
     });
 
     return {
@@ -266,52 +252,12 @@ export class NixDevShellResolver implements vscode.RemoteAuthorityResolver {
   }
 
   /**
-   * Read the devShell environment, once, for everything that is declared in it.
+   * The second bundle, beside this one.
    *
-   * Building the shell is what the server start would do anyway, and the result is cached
-   * by Nix, so this costs one extra evaluation rather than one extra build. A failure is
-   * not fatal: the window still opens, only without what the flake declared.
+   * `dist/provision.js` is built by the same `esbuild.mjs` and shipped in the `.vsix`; it
+   * is run by the server's `node` inside `nix develop`, never loaded in here.
    */
-  private async readDevShellEnv(opts: {
-    cfg: NixDevShellConfig;
-    target: RemoteTarget;
-    installable: string;
-    profile: string | undefined;
-    progress: (m: string) => void;
-    build: BuildTerminal | undefined;
-  }): Promise<CaptureResult | undefined> {
-    const build = opts.build;
-    try {
-      opts.progress("Reading what the devShell declares for the editor…");
-      return await captureEnv(
-        opts.cfg,
-        opts.installable,
-        opts.target.flakeDir,
-        opts.profile,
-        build
-          ? {
-              onOutput: (chunk) => build.write(chunk),
-              // Nix draws for the terminal it is told about, so it is given this one:
-              // its width now, and its width again whenever the user resizes the panel.
-              tty: {
-                columns: build.dimensions?.columns,
-                rows: build.dimensions?.rows,
-                onResize: build.onDidChangeDimensions,
-              },
-            }
-          : {},
-      );
-    } catch (err) {
-      // Unless the flake itself is the problem. This is the first thing to evaluate it,
-      // so it is where a typo in flake.nix surfaces with the whole build log behind it;
-      // carrying on would only run the same evaluation again under the server start and
-      // fail there, with less to say about why.
-      if (isEvaluationError(err)) throw err;
-      log.warn(
-        `could not read the devShell environment: ${(err as Error).message}`,
-      );
-      return undefined;
-    }
+  private provisionScript(): string {
+    return path.join(this.context.extensionUri.fsPath, "dist", "provision.js");
   }
 }
-

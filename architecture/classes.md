@@ -9,6 +9,11 @@ Read it with the dependency graph in mind: the leaves (`config`, `log`, `direnv`
 `authority`, `product`) know nothing about the rest, `nix` owns every way to invoke Nix,
 and `remote/*` is the only part that knows what a server is.
 
+And read `provision/*` as a separate program. It is bundled on its own as
+`dist/provision.js` and runs inside `nix develop`, so nothing in it may import `vscode` —
+which is why it carries its own `log`, its own `run`, and `protocol`, the only thing both
+bundles share.
+
 ```mermaid
 classDiagram
     direction TB
@@ -89,7 +94,7 @@ classDiagram
         +nixErrorSummary(err) string
         +nixErrorLocations(err) NixErrorLocation[]
         +toInstallable(selection, dir, system) string
-        +captureEnv(cfg, installable, dir, profile, opts) CaptureResult
+        +plainText(line) string
     }
 
     class NixCommand {
@@ -155,12 +160,6 @@ classDiagram
         +onResize?: Event~Dimensions~
     }
 
-    class CaptureResult {
-        <<interface>>
-        +inside: Record~string,string~
-        +baseline: Record~string,string~
-    }
-
     class DevShell {
         <<interface>>
         +name: string
@@ -202,14 +201,6 @@ classDiagram
         -item: StatusBarItem
         +set(state: StatusState) void
         +dispose() void
-    }
-
-    class environment {
-        <<module>>
-        -SESSION_OWNED: Set~string~
-        +computeDelta(capture, opts) EnvDelta
-        +describeDelta(delta) string
-        +renderDelta(delta, label) string
     }
 
     %% ------------------------------------------------------------ remote/leaf
@@ -266,16 +257,16 @@ classDiagram
         +findRunning(key, commit) ServerHandle
         +start(opts) ServerHandle
         +stop(key) boolean
+        +sweep() number
         -root: string
         -serverDir(commit) string
         -launcherIn(dir) string
         -product() ClientProduct
         -findExistingServer(commit) string
-        -storePathOf(installable, cwd) string
         -lockPath(key) string
         -readLock(key) LockFile
         -release(key, lock) void
-        -awaitListening(child, progress) number
+        -connectTimeoutSeconds: number
     }
 
     class ServerHandle {
@@ -293,12 +284,41 @@ classDiagram
         +rpath?: string
     }
 
+    %% ------------------------------------------------- provision (2nd bundle)
+
+    class protocol {
+        <<module>>
+    }
+
+    class ProvisionOptions {
+        <<interface>>
+        +launcher: string
+        +extensionsDir: string
+        +serverDataDir: string
+        +flakeDir: string
+        +lockFile: string
+        +connectionToken: string
+        +commit: string
+        +installable: string
+        +connectTimeoutSeconds: number
+        +installTimeoutSeconds: number
+    }
+
     class LockFile {
         <<interface>>
+        +port: number
+        +connectionToken: string
+        +pid: number
         +installable: string
         +commit: string
         +startedAt: number
-        +profile?: string
+    }
+
+    class provisionMain {
+        <<module>>
+        -main() void
+        -startServer(opts) void
+        -awaitListening(child, timeout) Listening
     }
 
     class extensions {
@@ -310,6 +330,7 @@ classDiagram
         +extensionsDirFor(root, key) string
         +resolveNixExtensions(storePaths) NixExtension[]
         +syncNixExtensions(extensionsDir, wanted) SyncResult
+        +installDeclaredExtensions(opts) void
     }
 
     class DeclaredExtensions {
@@ -334,11 +355,12 @@ classDiagram
         <<module>>
         +FLAKE_SETTINGS_VARS: string[]
         +parseFlakeSettings(raw, source) SettingsMap
-        +collectSettings(cfg, devShellEnv) SettingsSources
-        +mergedSettings(sources) SettingsMap
+        +collectSettings(devShellEnv) SettingsMap
         +machineSettingsPath(serverDataDir) string
         +parseJsonc(text) SettingsMap
+        +readMachineSettings(serverDataDir) SettingsMap
         +applyMachineSettings(serverDataDir, values) ApplyResult
+        +applyDeclaredSettings(opts) void
     }
 
     %% -------------------------------------------------------------- resolver
@@ -348,9 +370,8 @@ classDiagram
         +resolve(authority, context) ResolverResult
         +getCanonicalURI(uri) Uri
         -startOrAttach(authority, target, progress) ResolverResult
-        -readDevShellEnv(opts) CaptureResult
-        -installDeclaredExtensions(opts) void
-        -applyDeclaredSettings(opts) void
+        -startFresh(opts) ResolverResult
+        -provisionScript() string
     }
 
     class RemoteAuthorityResolver {
@@ -364,8 +385,6 @@ classDiagram
         +inDevShellWindow() boolean
         +reopenInDevShell(folder, devShell, flakeDir) void
         +reopenLocally() void
-        +showRemoteExtensions(context) void
-        +showRemoteEnvironment(context) void
         +killServer(context, folder) void
         +switchDevShellInRemoteWindow(context) void
         +offerExtensionSync(context) void
@@ -414,7 +433,6 @@ classDiagram
 
     nix ..> NixCommand : builds
     nix ..> DevelopOptions : takes
-    nix ..> CaptureResult : returns
     nix ..> DevShell : returns
     nix ..> NixError : throws
     nix ..> NixErrorLocation : returns
@@ -432,34 +450,36 @@ classDiagram
     recover ..> RemoteTarget : the folder to go back to
     recover ..> NixErrorLocation : picks one to open
 
-    environment ..> CaptureResult
-
     authority ..> RemoteTarget
     product ..> ClientProduct
 
     ServerManager ..> product : launcher name, download URL
-    ServerManager ..> nix : develop, build
+    ServerManager ..> nix : develop
     ServerManager ..> ServerHandle : returns
-    ServerManager ..> PatchedNode : returns
-    ServerManager ..> LockFile : reads and writes
-    ServerHandle <|-- LockFile
+    ServerManager ..> ProvisionOptions : writes into argv
+    ServerManager ..> LockFile : reads
+    ServerManager ..> provisionMain : runs, inside the shell
+    protocol ..> ProvisionOptions
+    protocol ..> LockFile
+
+    provisionMain ..> ProvisionOptions : its one argument
+    provisionMain ..> LockFile : writes
+    provisionMain --> extensions
+    provisionMain --> settings
 
     extensions ..> NixExtension
     extensions --> `extensions-manifest`
     extensions ..> DeclaredExtensions
-    extensions ..> nix : run(launcher)
-    settings ..> NixDevShellConfig
 
     NixDevShellResolver ..|> RemoteAuthorityResolver
     NixDevShellResolver --> ServerManager : owns per resolve
     NixDevShellResolver ..> authority : decode, storage key
-    NixDevShellResolver ..> extensions
-    NixDevShellResolver ..> settings
-    NixDevShellResolver ..> nix : captureEnv, toInstallable
+    NixDevShellResolver ..> extensions : extensionsDirFor
+    NixDevShellResolver ..> nix : currentSystem, toInstallable
+    NixDevShellResolver ..> PatchedNode
 
     remoteIndex ..> authority
     remoteIndex ..> ServerManager
-    remoteIndex ..> environment
     remoteIndex ..> nix
 
     extension --> DevShellSession : one per folder
@@ -482,6 +502,15 @@ one status bar is the only decision a folder cannot make alone.
 **`ServerManager` is constructed per resolve, not held.** It owns no server state; the lock
 file on disk does. Two windows resolving the same authority build two managers that agree
 because they read the same `<globalStorage>/server/instances/<key>.json`.
+
+**`provision/*` is a second program, not a layer.** It is bundled separately and runs in a
+different process, inside `nix develop`, started by the server's own `node`. The arrow from
+`ServerManager` to it is a process boundary: options go across as one JSON argument, and
+the only things that come back are the lock file and an exit code. That is also why
+`protocol` has no imports at all — it is linked into both bundles, and one of them has no
+`vscode` to pull in. `extensions` and `settings` live on that side because that is where
+they run; the extension host borrows `extensionsDirFor` and `installedIn` from them, which
+is the only traffic in the other direction.
 
 **`nix` is the only module that spells a Nix flag.** `nixCommand` and `developCommand` are
 the whole surface; `ServerManager` takes argv from them rather than assembling its own, so
@@ -509,12 +538,15 @@ graph BT
     pty[utils/pty]:::leaf
     runSubprocess[utils/run-subprocess]
     buildTerminal[utils/build-terminal]:::leaf
-    environment[environment]
     ui[ui]
     session[session]
 
-    extensions[remote/extensions]
-    settings[remote/settings]
+    protocol[provision/protocol]:::leaf
+    provisionLog[provision/log]:::leaf
+    provisionRun[provision/run]:::leaf
+    extensions[provision/extensions]
+    settings[provision/settings]
+    provisionMain[provision/main]
     server[remote/server]
     recover[remote/recover]
     resolver[remote/resolver]
@@ -525,19 +557,25 @@ graph BT
     nix --> log
     nix --> runSubprocess
     runSubprocess --> pty
-    environment --> nix
     ui --> nix
     session --> config
     session --> direnv
     session --> nix
     session --> ui
 
-    extensions --> config
-    extensions --> nix
-    settings --> config
+    extensions --> provisionLog
+    extensions --> provisionRun
+    settings --> provisionLog
+    config --> settings
+    provisionMain --> protocol
+    provisionMain --> extensions
+    provisionMain --> settings
+    provisionMain --> provisionLog
+
     server --> config
     server --> nix
     server --> product
+    server --> protocol
 
     recover --> authority
     recover --> nix
@@ -545,7 +583,6 @@ graph BT
     resolver --> authority
     resolver --> recover
     resolver --> extensions
-    resolver --> settings
     resolver --> server
     resolver --> nix
     resolver --> buildTerminal
@@ -553,7 +590,6 @@ graph BT
     index --> resolver
     index --> recover
     index --> server
-    index --> environment
     index --> ui
 
     ext --> index

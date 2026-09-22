@@ -50,6 +50,21 @@ const exists = (p: string): Promise<boolean> =>
 const commit = process.env.NIX_DEVSHELL_COMMIT ?? "";
 
 /**
+ * The second bundle, which `ServerManager.start` runs inside the devShell as the
+ * `--command` of its one `nix develop`. It is built by `npm run build`, so these tests
+ * need that to have happened -- asserted once here so a missing bundle reads as "build
+ * first" rather than as a server that mysteriously never came up.
+ */
+const provisionScript = path.join(import.meta.dirname, "..", "dist", "provision.js");
+
+beforeAll(async () => {
+  expect(
+    await exists(provisionScript),
+    `${provisionScript} is missing; run 'npm run build' before the e2e suite`,
+  ).toBe(true);
+});
+
+/**
  * Drives the real VS Code server lifecycle: start it inside `nix develop`, confirm the
  * devShell environment actually reached the server process, reuse it, then stop it.
  *
@@ -237,6 +252,7 @@ describe.skipIf(commit === "")("server (end-to-end)", { tags: ["e2e"] }, () => {
       profile,
       extensionsDir,
       serverDataDir,
+      provisionScript,
     });
     port = handle.port;
     expect(handle.port > 0, "a listening port is required").toBe(true);
@@ -446,6 +462,7 @@ describe.skipIf(!editor?.serverDownloadUrlTemplate || productCommit === "")(
         profile: path.join(work, ".vscode", "nix-devshell", "default", "devshell"),
         extensionsDir: path.join(storage, "ext"),
         serverDataDir: path.join(storage, "data"),
+        provisionScript,
       });
       port = handle.port;
       expect(handle.port > 0, "a listening port is required").toBe(true);
@@ -566,6 +583,7 @@ describe.skipIf(commit === "" || process.env.NIX_DEVSHELL_E2E_IDLE !== "1")(
       profile,
       extensionsDir: path.join(storage, "ext"),
       serverDataDir: path.join(storage, "data"),
+      provisionScript,
     });
     port = handle.port;
   });

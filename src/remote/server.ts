@@ -1,4 +1,3 @@
-import { spawn, type ChildProcess } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
@@ -6,24 +5,36 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import type { NixDevShellConfig } from "../config";
 import { log } from "../utils/log";
-import { developCommand } from "../nix";
+import { BUILD_LOG_FORMAT, developCommand, plainText } from "../nix";
 import { clientProduct, serverDownloadUrl, serverOsArch } from "./product";
 import { exists } from "../utils/fs-stat";
-import { run } from "../utils/run-subprocess";
+import { run, type TtyOptions } from "../utils/run-subprocess";
+import { serverNodePath } from "./server-ld-patch";
+import type { LockFile, ProvisionOptions } from "../provision/protocol";
 
-/** Printed by the server once the extension host agent is accepting connections. */
-const LISTENING = /Extension host agent listening on (\d+)/;
+/** How long one `--install-extension` inside the devShell may take. */
+const INSTALL_TIMEOUT_SECONDS = 300;
 
+/**
+ * Where the output of the one `nix develop` goes, and what to lay it out for.
+ *
+ * Everything the run produces goes here and nowhere else: Nix's build log, and the
+ * provisioning script's own lines, which it writes to stderr for exactly this reason.
+ * Nothing is parsed back out of it -- the script answers in its lock file and its exit
+ * code -- so this is a sink, not a channel.
+ */
+export interface BuildOutput {
+  /** Nix's bytes verbatim -- escape codes and all -- for something that can render them. */
+  onOutput?: (chunk: string) => void;
+  /** The terminal those bytes are being rendered in, so Nix can be given one of its own. */
+  tty?: TtyOptions;
+}
+
+/** What a resolve needs to hand VS Code: where the server is, and how to talk to it. */
 export interface ServerHandle {
   port: number;
   connectionToken: string;
   pid: number;
-}
-
-interface LockFile extends ServerHandle {
-  installable: string;
-  commit: string;
-  startedAt: number;
 }
 
 /**
@@ -256,11 +267,12 @@ export class ServerManager {
    * `nixDevShell.profile: persistent` -- so the store paths stay put for the next window,
    * offline or not, and the directory is the user's to delete.
    *
-   * Nothing runs inside the devShell to do this at the moment a server exits: the server is
-   * the process `nix develop` execs into, with no shell of ours around it. So a lock is
-   * cleaned up by whoever next looks at it -- `sweep`, `findRunning` or `stop` -- and until
-   * then it is a lock naming a port nothing answers on, which every reader already checks
-   * for. All three are idempotent, so the order they arrive in does not matter.
+   * Nothing of ours is running at the moment a server exits. The script that started it
+   * left as soon as it was up -- that is what lets the window let go of the build terminal
+   * -- so by the time the server retires there is no wrapper around it to notice. A lock is
+   * therefore cleaned up by whoever next looks at it: `sweep`, `findRunning` or `stop`.
+   * Until then it is a lock naming a port nothing answers on, which every reader already
+   * checks for. All three are idempotent, so the order they arrive in does not matter.
    */
   private async release(key: string, lock: LockFile): Promise<void> {
     await fs.rm(this.lockPath(key), { force: true });
@@ -308,10 +320,10 @@ export class ServerManager {
   /**
    * Stop the server behind a key.
    *
-   * The signal goes to the whole process *group* rather than the recorded pid. The child
-   * was spawned detached, so it leads a new group that the real server stays in even after
-   * `nix develop` itself exits -- signalling the bare pid would hit a corpse and leave the
-   * server running.
+   * The signal goes to the whole process *group* rather than the recorded pid. The pid in
+   * the lock is the server's own, and the server was started detached -- so it leads both a
+   * session and a group of its own, and the group is what catches the extension hosts and
+   * terminals it has forked along the way.
    */
   async stop(key: string): Promise<boolean> {
     const lock = await this.readLock(key);
@@ -370,9 +382,19 @@ export class ServerManager {
   }
 
   /**
-   * Start a server *inside* `nix develop`, so that the server process -- and therefore the
-   * remote extension host it forks, its terminals, tasks and debuggers -- inherits the
-   * devShell environment from birth.
+   * Build the devShell, provision it and start a server in it -- in one `nix develop`.
+   *
+   * One, now, rather than two. The extension used to enter the shell once with a script
+   * that dumped the environment into a temp file, parse that file out here to learn what
+   * the flake declared, provision from out here, and then enter the shell a second time to
+   * start the server. Everything between those two entries is now `dist/provision.js`,
+   * running inside the shell, where `vscodeExtensions` is simply an environment variable
+   * it can read. What is left out here is arranging the call and reading its result.
+   *
+   * The server that comes of it is detached and outlives this -- see `startServer` in that
+   * script. What this waits on is a short-lived `nix develop` that has already exited by
+   * the time it returns, which is why `run` suffices where a hand-rolled detached spawn
+   * used to be needed, and why the build terminal can be disposed the moment it is done.
    */
   async start(opts: {
     key: string;
@@ -384,137 +406,111 @@ export class ServerManager {
     profile: string | undefined;
     extensionsDir: string;
     serverDataDir: string;
+    /** `dist/provision.js`, as shipped beside this bundle. */
+    provisionScript: string;
     progress?: (m: string) => void;
+    output?: BuildOutput;
   }): Promise<ServerHandle> {
-    const connectionToken = crypto.randomUUID();
     await fs.mkdir(opts.extensionsDir, { recursive: true });
     await fs.mkdir(opts.serverDataDir, { recursive: true });
     await fs.mkdir(path.dirname(this.lockPath(opts.key)), { recursive: true });
 
+    // The server's own `node`, not the devShell's. A devShell need not have one, and if it
+    // does it is the project's rather than the editor's; this one is known to match the
+    // server, and `patchServerNode` has already dealt with whether it can start at all.
+    const node = await serverNodePath(opts.launcher);
+
+    const provision: ProvisionOptions = {
+      launcher: opts.launcher,
+      extensionsDir: opts.extensionsDir,
+      serverDataDir: opts.serverDataDir,
+      flakeDir: opts.flakeDir,
+      lockFile: this.lockPath(opts.key),
+      // Minted here because the window needs it whether or not the script gets that far,
+      // and because a resolve that ends in a different token than it handed VS Code has
+      // nothing to connect with.
+      connectionToken: crypto.randomUUID(),
+      commit: opts.commit,
+      installable: opts.installable,
+      connectTimeoutSeconds: this.connectTimeoutSeconds,
+      installTimeoutSeconds: INSTALL_TIMEOUT_SECONDS,
+    };
+
+    // A stale lock from a server that has gone would otherwise be read back below as
+    // though this run had written it.
+    await fs.rm(provision.lockFile, { force: true });
+
     // How to enter a devShell belongs to `nix.ts`; what to run once inside it is the only
-    // part this file gets an opinion about. `nix develop --command` execs, so the launcher
-    // *is* the process this spawn returns -- nothing is interposed between the extension
-    // and the server.
+    // part this file gets an opinion about.
     const { exe, args } = await developCommand(this.cfg, {
       installable: opts.installable,
       profile: opts.profile,
-      command: [
-        opts.launcher,
-        "--start-server",
-        // Servers outlive the window that started them so the next one attaches instantly,
-        // but nothing here notices when the *last* window goes away: VS Code never asks a
-        // server to exit, and a devShell window cannot sensibly kill the server it is
-        // running on. The server settles it itself. Five minutes after its last extension
-        // host disconnects it exits; an extension host that reconnects inside that window
-        // cancels it, which is what keeps reloads and reopens on the running server. The
-        // same timer starts at boot, so a server we start and then fail to connect to is
-        // collected too rather than lingering for the life of the machine.
-        "--enable-remote-auto-shutdown",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "0",
-        "--connection-token",
-        connectionToken,
-        "--accept-server-license-terms",
-        "--telemetry-level",
-        "off",
-        "--server-data-dir",
-        opts.serverDataDir,
-        "--extensions-dir",
-        opts.extensionsDir,
-      ],
+      command: [node, opts.provisionScript, JSON.stringify(provision)],
+      logFormat: opts.output?.onOutput ? BUILD_LOG_FORMAT : undefined,
     });
 
-    log.info(`starting devShell server: ${exe} ${args.join(" ")}`);
-    opts.progress?.("Starting the server inside the devShell…");
-
-    // Detached, so closing the window that started it does not tear the server down; the
-    // lock file is how a later window finds it again.
-    const child = spawn(exe, args, {
-      cwd: opts.flakeDir,
-      // Nothing of ours is added: whatever this process is given, the devShell window's
-      // terminals, tasks and debuggers inherit.
-      env: { ...process.env },
-      detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    const port = await this.awaitListening(child, opts.progress);
-    child.unref();
-
-    const handle: ServerHandle = {
-      port,
-      connectionToken,
-      pid: child.pid ?? -1,
-    };
-    const lock: LockFile = {
-      ...handle,
-      installable: opts.installable,
-      commit: opts.commit,
-      startedAt: Date.now(),
-    };
-    await fs.writeFile(this.lockPath(opts.key), JSON.stringify(lock, null, 2));
+    // The token is in there -- as it always was, in the server's own `--connection-token`
+    // -- and the log is a document people paste into issues.
     log.info(
-      `devShell server listening on 127.0.0.1:${port} (pid ${handle.pid})`,
+      `entering the devShell: ${exe} ${args.join(" ")}`.replace(
+        provision.connectionToken,
+        "<token>",
+      ),
     );
-    return handle;
+    opts.progress?.("Building the devShell\u2026");
+
+    // Everything both sides produce goes to the terminal as it arrives, and the
+    // notification gets the same stream a line at a time -- it cannot render one.
+    let carry = "";
+    const toOutput = (chunk: string) => {
+      opts.output?.onOutput?.(chunk);
+      carry += chunk;
+      const lines = carry.split("\n");
+      carry = lines.pop() ?? "";
+      for (const line of lines) {
+        const text = plainText(line);
+        if (text) opts.progress?.(text);
+      }
+    };
+
+    // Throws on a non-zero exit, which is the whole of the protocol: the script exits zero
+    // exactly when the lock file below describes a server that is up. What went wrong is
+    // in the output either way -- and when Nix is what went wrong, this error is also what
+    // `isEvaluationError` reads to decide whether a retry could ever go differently.
+    await run(exe, args, {
+      cwd: opts.flakeDir,
+      // One call now covers what two settings used to guard separately, so it is allowed
+      // both budgets: the build, and then the server coming up.
+      timeoutMs:
+        (Math.max(30, this.cfg.buildTimeoutSeconds) +
+          this.connectTimeoutSeconds) *
+        1000,
+      onStderr: toOutput,
+      // A `shellHook` banner is the devShell talking to the user; it belongs on screen.
+      onStdout: toOutput,
+      tty: opts.output?.tty,
+    });
+
+    const lock = await this.readLock(opts.key);
+    if (!lock) {
+      throw new Error(
+        "the devShell was entered and provisioning reported success, but left no server. " +
+          "See the build output.",
+      );
+    }
+    log.info(
+      `devShell server listening on 127.0.0.1:${lock.port} (pid ${lock.pid})`,
+    );
+    return {
+      port: lock.port,
+      connectionToken: lock.connectionToken,
+      pid: lock.pid,
+    };
   }
 
-  private awaitListening(
-    child: ChildProcess,
-    progress?: (m: string) => void,
-  ): Promise<number> {
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      let buffer = "";
-      const timeoutMs =
-        Math.max(30, this.cfg.remote.connectTimeoutSeconds) * 1000;
-
-      const finish = (fn: () => void) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        fn();
-      };
-
-      const timer = setTimeout(() => {
-        child.kill("SIGTERM");
-        finish(() =>
-          reject(
-            new Error(
-              `the server did not report a listening port within ${timeoutMs / 1000}s`,
-            ),
-          ),
-        );
-      }, timeoutMs);
-
-      const onChunk = (data: Buffer) => {
-        const text = data.toString("utf8");
-        buffer += text;
-        for (const line of text.split("\n")) {
-          const t = line.trim();
-          if (t) log.info(`[server] ${t}`);
-          if (/^(Installing|Downloading|Extracting|Updating)/i.test(t))
-            progress?.(t.slice(0, 80));
-        }
-        const match = LISTENING.exec(buffer);
-        if (match) finish(() => resolve(Number(match[1])));
-      };
-
-      child.stdout?.on("data", onChunk);
-      child.stderr?.on("data", onChunk);
-      child.on("error", (err) => finish(() => reject(err)));
-      child.on("exit", (code) =>
-        finish(() =>
-          reject(
-            new Error(
-              `the server exited with code ${code} before listening.\n${buffer.slice(-1500)}`,
-            ),
-          ),
-        ),
-      );
-    });
+  /** `nixDevShell.remote.connectTimeoutSeconds`, floored so it cannot be set to nothing. */
+  private get connectTimeoutSeconds(): number {
+    return Math.max(30, this.cfg.remote.connectTimeoutSeconds);
   }
 }
 

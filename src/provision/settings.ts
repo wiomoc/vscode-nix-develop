@@ -1,7 +1,14 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { SettingsMap } from "../config";
-import { log } from "../utils/log";
+import { log } from "./log";
+
+/**
+ * Editor settings, as they appear in a `settings.json`.
+ *
+ * Declared here rather than in `config.ts`, which this side of the extension cannot
+ * import: that module reads the editor's configuration and so pulls `vscode` in with it.
+ */
+export type SettingsMap = Record<string, unknown>;
 
 /**
  * Per-devShell editor settings.
@@ -121,7 +128,9 @@ function validate(values: SettingsMap, source: string): SettingsMap {
 }
 
 /** The settings the devShell declares, with later variables winning over earlier ones. */
-export function collectSettings(devShellEnv: Record<string, string>): SettingsMap {
+export function collectSettings(
+  devShellEnv: Record<string, string | undefined>,
+): SettingsMap {
   const values: SettingsMap = {};
   for (const name of FLAKE_SETTINGS_VARS) {
     const raw = devShellEnv[name];
@@ -205,7 +214,7 @@ export function parseJsonc(text: string): SettingsMap {
  * contents we are simply blind to, and a caller about to rewrite it must not mistake that
  * for an empty file. A missing file is the ordinary first-run case and reads as empty.
  */
-export async function readMachineSettings(
+async function readMachineSettings(
   serverDataDir: string,
 ): Promise<SettingsMap | undefined> {
   const file = machineSettingsPath(serverDataDir);
@@ -296,7 +305,7 @@ export async function applyMachineSettings(
  */
 export async function applyDeclaredSettings(opts: {
   serverDataDir: string;
-  devShellEnv: Record<string, string>;
+  devShellEnv: Record<string, string | undefined>;
 }): Promise<void> {
   const values = collectSettings(opts.devShellEnv);
   const keys = Object.keys(values);

@@ -20,8 +20,6 @@ import {
   watchDevShellFlake,
   offerExtensionSync,
   openPendingFile,
-  showRemoteEnvironment,
-  showRemoteExtensions,
   switchDevShellInRemoteWindow,
   sweepServerLocks,
 } from "./remote";
@@ -123,24 +121,10 @@ export async function activate(
       );
     }),
 
-    vscode.commands.registerCommand("nixDevShell.showEnvironment", async () => {
-      if (!inDevShellWindow()) {
-        void vscode.window.showInformationMessage(
-          "Reopen the folder in a devShell first — this window is not running inside one.",
-        );
-        return;
-      }
-      await showRemoteEnvironment();
-    }),
-
     vscode.commands.registerCommand("nixDevShell.showLog", () => log.show()),
 
     vscode.commands.registerCommand("nixDevShell.reopenLocally", () =>
       reopenLocally(),
-    ),
-
-    vscode.commands.registerCommand("nixDevShell.remoteExtensions", () =>
-      showRemoteExtensions(context),
     ),
 
     vscode.commands.registerCommand("nixDevShell.restartDevShell", () =>

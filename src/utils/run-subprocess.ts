@@ -22,9 +22,9 @@ export interface RunOptions {
    * Streamed stdout.
    *
    * Nix writes its own logs to stderr and keeps stdout for the payload, so this is not
-   * where build progress arrives -- it is where a devShell's `shellHook` banner does.
-   * Only safe to stream when the caller is not using stdout as data; `captureEnv` routes
-   * the environment through a file precisely so that it is not.
+   * where build progress arrives -- it is where a devShell's `shellHook` banner does, and
+   * where anything `--command` prints. Only safe to stream when the caller is not reading
+   * stdout as data, which is why it is separate from `onStderr` rather than implied by it.
    */
   onStdout?: (chunk: string) => void;
   /**

@@ -1,16 +1,8 @@
-import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { EXTENSION_ID, isResolverAvailable, readConfig } from "../config";
 import { log } from "../utils/log";
-import {
-  captureEnv,
-  currentSystem,
-  listDevShells,
-  toInstallable,
-} from "../nix";
-import { ensureProfile } from "../profile";
-import { computeDelta, renderDelta } from "../environment";
+import { currentSystem, listDevShells } from "../nix";
 import {
   AUTHORITY_PREFIX,
   authorityFor,
@@ -18,10 +10,6 @@ import {
   storageKeyFor,
 } from "./authority";
 import { extensionsDirFor, installedIn } from "../provision/extensions";
-import {
-  machineSettingsPath,
-  readMachineSettings,
-} from "../provision/settings";
 import { ServerManager } from "./server";
 import { reopenFolderLocally } from "./recover";
 import { pickDevShell } from "../ui";
@@ -113,84 +101,6 @@ export async function reopenLocally(): Promise<void> {
 }
 
 /**
- * Show which extensions this devShell's server has, and where each came from. This is the
- * view that makes per-devShell scoping legible: the list is the contents of the server's
- * `--extensions-dir`, which is chosen per devShell.
- */
-export async function showRemoteExtensions(
-  context: vscode.ExtensionContext,
-): Promise<void> {
-  const authority = vscode.env.remoteAuthority;
-  if (!authority || !inDevShellWindow()) {
-    void vscode.window.showInformationMessage(
-      "This window is not running inside a devShell server. Use “Reopen in devShell” first.",
-    );
-    return;
-  }
-
-  const key = storageKeyFor(authority);
-  const root = path.join(context.globalStorageUri.fsPath, "remote");
-  const dir = extensionsDirFor(root, key);
-  const installed = await installedIn(dir);
-  // Extensions the flake supplies are symlinks into the store rather than installs.
-  const entries = await fsp
-    .readdir(dir, { withFileTypes: true })
-    .catch(() => []);
-  const nixLinked = entries
-    .filter((e) => e.isSymbolicLink())
-    .map((e) => e.name)
-    .sort();
-
-  // The devShell's settings live in the server's machine settings file, which is the same
-  // "this devShell only" story as the extension directory above.
-  const serverDataDir = path.join(root, "data", key);
-  const settingsFile = machineSettingsPath(serverDataDir);
-  const settings = await readMachineSettings(serverDataDir);
-  const settingsKeys = Object.keys(settings ?? {}).sort();
-
-  const remoteKind = vscode.extensions.all
-    .filter((e) => !e.id.startsWith("vscode."))
-    .map((e) => ({
-      id: e.id,
-      kind:
-        e.extensionKind === vscode.ExtensionKind.Workspace ? "workspace" : "ui",
-    }));
-
-  const lines = [
-    `# Extensions for devShell '${process.env.NIX_DEVSHELL_SHELL ?? authority}'`,
-    "",
-    `Server extensions directory:`,
-    `  ${dir}`,
-    `  (this devShell only)`,
-    "",
-    `## Installed in this devShell (${installed.length})`,
-    ...(installed.length ? installed.map((i) => `  ${i}`) : ["  (none)"]),
-    "",
-    `## Supplied by the flake`,
-    "  reading 'vscodeExtensions' from the devShell",
-    ...(nixLinked.length ? nixLinked.map((i) => `  ${i}  (built by Nix)`) : []),
-    "",
-    `## Settings applied to this devShell`,
-    `  ${settingsFile}`,
-    ...(settings === undefined
-      ? ["  (unreadable)"]
-      : settingsKeys.length
-        ? settingsKeys.map((k) => `  ${k}`)
-        : ["  (none)"]),
-    "  reading 'vscodeSettings' from the devShell",
-    "",
-    `## Where extensions are running in this window`,
-    ...remoteKind.map((e) => `  ${e.kind.padEnd(9)} ${e.id}`),
-  ];
-
-  const doc = await vscode.workspace.openTextDocument({
-    language: "markdown",
-    content: lines.join("\n"),
-  });
-  await vscode.window.showTextDocument(doc, { preview: true });
-}
-
-/**
  * Stop the server backing a devShell, so the next open starts a fresh one.
  *
  * Inside a devShell window the target is obvious: this window's own server. From a local
@@ -270,9 +180,9 @@ export async function killServer(
  *
  * A devShell server outlives the window that started it and retires itself once it has
  * been idle, which means the moment it exits there is nothing of ours running to tidy up
- * after it -- the server is the process `nix develop` exec'd into, with no shell of ours
- * wrapped around it. The extension is the one that notices, so it does the tidying, at the
- * point a stale lock is most likely to be sitting there: the next time an editor starts.
+ * after it -- the script that started it inside the devShell exited the moment it was up.
+ * The extension is the one that notices, so it does the tidying, at the point a stale lock
+ * is most likely to be sitting there: the next time an editor starts.
  *
  * Nothing waits on this. A lock that outlives its server is inert -- every reader tests the
  * port before trusting it -- so sweeping is housekeeping, not a precondition for anything.
@@ -412,56 +322,4 @@ export async function offerExtensionSync(
   } else if (choice === "Don't ask again") {
     await context.globalState.update(key, true);
   }
-}
-
-/**
- * Render the environment a devShell window is actually running in.
- *
- * There is no local session here to ask, so the shell is re-read from the flake the
- * authority points at. Reporting "no devShell is active" inside a devShell window would be
- * plainly wrong.
- */
-export async function showRemoteEnvironment(): Promise<void> {
-  const authority = vscode.env.remoteAuthority;
-  const target = authority ? decodeAuthority(authority) : undefined;
-  if (!target) {
-    void vscode.window.showWarningMessage(
-      "This devShell window's origin is unknown.",
-    );
-    return;
-  }
-
-  const cfg = readConfig(vscode.workspace.workspaceFolders?.[0]);
-  const text = await vscode.window.withProgress(
-    {
-      location: vscode.ProgressLocation.Window,
-      title: "Nix: reading devShell environment…",
-    },
-    async () => {
-      const system = await currentSystem(cfg, target.flakeDir);
-      const installable = toInstallable(
-        target.devShell,
-        target.flakeDir,
-        system,
-      );
-      // The same GC root the window's server runs under, so reading the environment
-      // re-enters the shell that is already built rather than rooting a second copy.
-      const profile = await ensureProfile(cfg, target.folder, target.devShell);
-      // No terminal here: the shell this reads is the one the window is already running
-      // in, so it is built, and there is nothing to watch.
-      const capture = await captureEnv(
-        cfg,
-        installable,
-        target.flakeDir,
-        profile,
-      );
-      return renderDelta(computeDelta(capture), target.devShell);
-    },
-  );
-
-  const doc = await vscode.workspace.openTextDocument({
-    language: "shellscript",
-    content: text,
-  });
-  await vscode.window.showTextDocument(doc, { preview: true });
 }

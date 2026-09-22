@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- **One `nix develop` per window, not two.** Opening a devShell window used to enter the
+  shell twice: once with a shell script that dumped its environment into a temp file, which
+  the extension parsed to learn what `vscodeExtensions` and `vscodeSettings` declared, and
+  again to start the server. Everything between those two entries now runs *inside* the
+  shell, as a second bundle (`dist/provision.js`) launched by the server's own `node`. It
+  reads what the flake declares straight out of `process.env`, links and installs the
+  extensions, writes the machine settings, starts the server and writes the lock file. One
+  evaluation, one `shellHook` run, and no environment to ship across a process boundary.
+- **The server is detached from the window that started it, properly.** It is started in a
+  session of its own, so closing the build terminal cannot SIGHUP it, and the pid in the
+  lock file is now the server's own rather than the `nix develop` that exec'd away -- which
+  is the process group `Stop devShell server` signals. Its pipes are read only until it
+  names its port and then dropped, instead of being held for the whole session with an
+  ever-growing buffer behind them; the server writes its real logs to
+  `<serverDataDir>/data/logs/` regardless.
+- **Removed `Nix DevShell: Show devShell extensions (remote)`.** What it reported --
+  what was linked, what was installed, what was refused, and which settings were applied --
+  is now written to the build terminal as the devShell is entered, and kept in the log.
+- **Removed `Nix DevShell: Show resolved environment`.** It existed to answer "did the
+  devShell actually apply?" back when the answer was not obvious. It is: the extension host
+  *is* a process inside `nix develop`, so any terminal in the window answers it, and the
+  command's only remaining job was keeping a whole second way of reading a devShell's
+  environment -- a shell script, a NUL-delimited dump file, a parser and a differ -- alive
+  for one document nobody had to read.
+- Nothing parses the build output any more. The provisioning script reports success by
+  exiting zero and leaving a lock file behind, so the stream is free to be nothing but
+  output -- Nix's build log and the script's own lines, going straight to the terminal.
+
 - **Renamed to `wiomoc.nix-devshell`, with no compatibility shim.** The extension id, the
   `nixDevShell.*` settings and commands, the `nix-devshell+…` remote authority, the GC-root
   directory `.vscode/nix-devshell/`, the machine settings file `nix-devshell.managed.json`

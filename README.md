@@ -87,8 +87,6 @@ the proposed API enabled. The extension on its own is `packages.${system}.defaul
 | `Nix DevShell: Reopen in devShell` | Reopen the folder with the extension host running inside the devShell |
 | `Nix DevShell: Select devShell` | Switch the devShell a devShell window is running in; only offered inside one |
 | `Nix DevShell: Reopen folder locally` | Leave a devShell window |
-| `Nix DevShell: Show resolved environment` | Open the computed environment as a document |
-| `Nix DevShell: Show devShell extensions (remote)` | What is installed in this devShell, and where each extension runs |
 | `Nix DevShell: Restart devShell server` | Put the window back on a devShell built from the flake as it is now |
 | `Nix DevShell: Stop devShell server` | Stop the server backing a devShell; run inside a devShell window, it leaves the folder in a local one |
 | `Nix DevShell: Show log` | Open the output channel |

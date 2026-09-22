@@ -46,11 +46,6 @@
         "category": "Nix DevShell"
       },
       {
-        "command": "nixDevShell.showEnvironment",
-        "title": "Show resolved environment",
-        "category": "Nix DevShell"
-      },
-      {
         "command": "nixDevShell.showLog",
         "title": "Show log",
         "category": "Nix DevShell"
@@ -63,11 +58,6 @@
       {
         "command": "nixDevShell.reopenLocally",
         "title": "Reopen folder locally",
-        "category": "Nix DevShell"
-      },
-      {
-        "command": "nixDevShell.remoteExtensions",
-        "title": "Show devShell extensions (remote)",
         "category": "Nix DevShell"
       },
       {
@@ -180,19 +170,11 @@
           "when": "nixDevShell.inDevShell"
         },
         {
-          "command": "nixDevShell.showEnvironment",
-          "when": "nixDevShell.hasFlake || nixDevShell.inDevShell"
-        },
-        {
           "command": "nixDevShell.reopenInDevShell",
           "when": "nixDevShell.hasFlake && !nixDevShell.inDevShell"
         },
         {
           "command": "nixDevShell.reopenLocally",
-          "when": "nixDevShell.inDevShell"
-        },
-        {
-          "command": "nixDevShell.remoteExtensions",
           "when": "nixDevShell.inDevShell"
         },
         {

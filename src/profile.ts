@@ -11,7 +11,7 @@ import type { NixDevShellConfig } from "./config";
  * leaves it there. `none` passes no `--profile` at all, which leaves the shell's store
  * paths unrooted: on Linux, Nix's GC still scans `/proc` for paths a live process
  * references, so a *running* server is largely covered, but nothing protects the shell
- * between the environment capture and the server start, nothing survives the server's
+ * between the build finishing and the server appearing, nothing survives the server's
  * exit, and a GC that starts before the server appears does not see it at all.
  */
 export type ProfileMode = NixDevShellConfig["profile"];

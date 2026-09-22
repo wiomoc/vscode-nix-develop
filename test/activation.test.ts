@@ -45,11 +45,9 @@ describe("activation", () => {
   it("registers every contributed command", () => {
     for (const id of [
       "nixDevShell.selectDevShell",
-      "nixDevShell.showEnvironment",
       "nixDevShell.showLog",
       "nixDevShell.reopenInDevShell",
       "nixDevShell.reopenLocally",
-      "nixDevShell.remoteExtensions",
       "nixDevShell.killServer",
     ]) {
       expect(stub.recorded.commands, `command ${id} was never registered`).toContain(id);

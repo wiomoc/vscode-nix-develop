@@ -86,9 +86,8 @@ sequenceDiagram
     participant Nix as nix.ts
     participant NixCLI as nix (process)
     participant FS as globalStorage
-    participant Extn as remote/extensions
-    participant Set as remote/settings
     participant Term as BuildTerminal
+    participant Prov as provision.js (in the shell)
     participant Server as code-server
 
     Code->>Res: resolve("nix-devshell+…", { resolveAttempt })
@@ -115,13 +114,12 @@ sequenceDiagram
             Note over Code: done — no Nix, no build, no download
         else port dead
             SM->>FS: release() — delete the lock (the profile is the project's, and stays)
-            Note right of SM: a lock naming a dead port —<br/>the server retired, or was killed
             SM-->>Res: undefined
         end
     end
 
     rect rgb(40, 45, 70)
-        Note over Res,Server: Cold path
+        Note over Res,Server: Cold path — everything below happens before the shell is entered
         Res->>Term: new BuildTerminal("nix develop: ci")
         Note right of Term: only past the attach: a window landing on a<br/>running server builds nothing<br/>(skipped when showBuildOutput is never)
         Res->>SM: ensureServer(commit, progress)
@@ -134,88 +132,92 @@ sequenceDiagram
             alt still nothing
                 SM->>Prod: serverDownloadUrl(product, commit, configured)
                 SM->>SM: download + tar -xzf + distributionRoot()
-                Note right of SM: flat unpack, then find the real root:<br/>MS wraps, VSCodium does not
             end
         end
         SM-->>Res: <launcher path>
 
         Res->>SM: patchServerNode(launcher, flakeDir)
         alt nixDevShell.remote.patchServerLd = false
-            Note right of SM: nothing is built and nothing is written;<br/>the host resolves /lib64/ld-linux-* itself
+            Note right of SM: nothing is built and nothing is written --<br/>the host resolves /lib64/ld-linux-* itself
         else patching (the default)
-            SM->>Nix: nixCommand(build --no-link --print-out-paths)
-            Nix->>NixCLI: nix build nixpkgs#glibc.out
-            Nix->>NixCLI: nix build nixpkgs#gcc-unwrapped.lib
-            Nix->>NixCLI: nix build nixpkgs#patchelf.out
-            SM->>SM: glibcLinkerName(process.arch)
-            SM->>SM: patchelf --print-interpreter / --print-rpath (skip if already patched)
+            SM->>NixCLI: nix build nixpkgs#glibc.out / gcc-unwrapped.lib / patchelf.out
             SM->>SM: patchelf --set-rpath then --set-interpreter on a copy, renamed over <root>/node
-            Note right of SM: the extension patches, not bin/code-server, so no<br/>VSCODE_SERVER_CUSTOM_GLIBC_* reaches the server:<br/>no "unsupported OS" banner, and a busy node is<br/>swapped rather than rewritten
+            Note right of SM: the same node runs provision.js a moment later,<br/>so this has to be settled first
         end
         SM-->>Res: PatchedNode { patched, node, linker?, rpath? }
-    end
-    Note over Res: done before anything runs the launcher —<br/>installing extensions starts the same node
 
-    Res->>Nix: currentSystem(cfg, flakeDir)
-    Res->>Nix: toInstallable("ci", flakeDir, system)
-    Nix-->>Res: /path#devShells.x86_64-linux.ci
-    Note over Res: paths derived from the storage key:<br/>remote/extensions/<key>, remote/data/<key>
-    Res->>FS: ensureProfile(cfg, folder, devShell)<br/><folder>/.vscode/nix-devshell/<devShell>/devshell + .gitignore<br/>(undefined when nixDevShell.profile is none)
+        Res->>Nix: currentSystem(cfg, flakeDir)
+        Res->>Nix: toInstallable("ci", flakeDir, system)
+        Nix-->>Res: /path#devShells.x86_64-linux.ci
+        Res->>FS: ensureProfile(cfg, folder, devShell)<br/><folder>/.vscode/nix-devshell/<devShell>/devshell + .gitignore
+        Note over Res: paths derived from the storage key:<br/>remote/extensions/<key>, remote/data/<key>
+    end
 
     rect rgb(60, 50, 30)
-        Note over Res,NixCLI: One capture serves extensions and settings
-        Res->>Nix: captureEnv(cfg, installable, flakeDir, profile, { onOutput, tty })
-        Note right of Res: tty carries the terminal's width —<br/>Nix lays its progress bar out for it
-        Nix->>NixCLI: bash -c DUMP_SCRIPT (baseline, no devShell)
-        Nix->>Nix: developCommand(...) — mkdir profile dir
-        Nix->>Nix: loadPty() — the editor's node-pty from <appRoot>, or nothing
-        Nix->>NixCLI: nix --log-format bar-with-logs develop <installable> --profile <p> --command bash -c DUMP_SCRIPT
-        Note right of NixCLI: under a pty when one was lent, so isatty()<br/>is true and Nix draws its bar in colour;<br/>over a pipe otherwise, same logs, no colour
-        Note right of NixCLI: builds the devShell<br/>--profile makes it a GC root that stays<br/>until the user deletes .vscode/nix-devshell
-        NixCLI-->>Nix: stdout + stderr, streamed
-        Nix->>Term: write(chunk) — verbatim, CRLF-corrected, nothing of ours added
-        Nix-->>Res: onProgress(line) — same stream, ANSI stripped
-        NixCLI-->>Nix: NUL-delimited env, written to a temp file
-        Nix-->>Res: CaptureResult { inside, baseline }
-        Note over Res: a failure here is logged, not fatal —<br/>the window opens without what the flake declared
-    end
-
-    Res->>Extn: collectExtensions(capture.inside)
-    Note right of Extn: 'vscodeExtensions', split into store paths and Marketplace ids
-    Res->>Extn: resolveNixExtensions(declared.paths)
-    Res->>Extn: syncNixExtensions(extensionsDir, nixExtensions)
-    Extn->>FS: symlinks + extensions.json + .obsolete
-    Note right of Extn: the server loads what extensions.json lists,<br/>not what the directory holds
-    Res->>Extn: ensureInstalled({ launcher, extensionsDir, wanted: declared.ids })
-    Extn->>Server: <launcher> --install-extension <id> (once per missing id)
-    Note right of Extn: the first thing to run the launcher, on a node<br/>that patchServerNode has already dealt with
-
-    Res->>Set: collectSettings(cfg, capture.inside) + mergedSettings()
-    Res->>Set: applyMachineSettings(serverDataDir, values)
-    Set->>FS: write data/Machine/settings.json + nix-devshell.managed.json
-    Note right of Set: before the server starts, so the host<br/>reads them on its first pass
-
-    rect rgb(45, 30, 60)
-        Note over Res,Server: Start the server inside the shell
-        Res->>SM: start({ key, commit, launcher, installable, profile, dirs })
+        Note over Res,Server: One `nix develop`, from here to a listening server
+        Res->>SM: start({ key, commit, launcher, installable, profile, dirs, provisionScript })
         SM->>SM: connectionToken = randomUUID()
-        SM->>Nix: developCommand(cfg, { installable, profile, command: [<launcher>, --start-server, …] })
-        Nix-->>SM: { exe: nix, args: [--extra-experimental-features …, develop, …] }
-        SM->>Server: spawn(detached, nix develop … --command <launcher> --start-server …)
-        Note right of Server: nix develop --command *execs*,<br/>so the launcher keeps the spawned pid —<br/>nothing of ours sits in between
-        Server-->>SM: stdout "Extension host agent listening on 41263"
-        SM->>SM: awaitListening() resolves, then child.unref()
-        SM->>FS: write server/instances/<key>.json { port, token, pid, commit, profile }
+        SM->>FS: rm the stale lock, so what is read back is this run's
+        SM->>Nix: developCommand(… --command <node> provision.js '<ProvisionOptions JSON>')
+        Nix-->>SM: { exe: nix, args: […, develop, …, --command, …] }
+        SM->>NixCLI: run(nix --log-format bar-with-logs develop … ), under the editor's pty
+        Note right of NixCLI: builds the devShell<br/>--profile makes it a GC root that stays<br/>until the user deletes .vscode/nix-devshell
+        NixCLI-->>Term: every byte, verbatim, CRLF-corrected
+        NixCLI-->>SM: the same stream, a line at a time, for the progress notification
+
+        NixCLI->>Prov: exec <node> provision.js '<options>'
+        Note right of Prov: it *is* the devShell, so vscodeExtensions<br/>and vscodeSettings are just process.env
+        Prov->>Prov: collectExtensions(process.env)
+        Prov->>FS: syncNixExtensions — symlinks + extensions.json + .obsolete
+        Prov->>Server: <launcher> --install-extension <id> (once per missing id)
+        Prov->>FS: applyMachineSettings — data/Machine/settings.json + nix-devshell.managed.json
+        Prov->>Server: spawn(detached, <launcher> --start-server --port 0)
+        Note right of Server: a session of its own, so closing the pty<br/>cannot SIGHUP it, and its pid leads the<br/>process group that stop signals
+        Server-->>Prov: stdout "Extension host agent listening on 41263"
+        Prov->>Prov: drop the pipes — the server keeps its own logs<br/>under serverDataDir/data/logs
+        Prov->>FS: write server/instances/<key>.json { port, token, pid, commit, installable }
+        Prov-->>NixCLI: exit 0
+        NixCLI-->>SM: exit 0
+        SM->>FS: read the lock back
         SM-->>Res: ServerHandle
+        Note over Term: disposed unless showBuildOutput is always —<br/>nothing of ours is still holding the pty
     end
 
     Res-->>Code: ResolvedAuthority(127.0.0.1, port, token)<br/>+ extensionHostEnv NIX_DEVSHELL_SHELL/_FLAKE, isTrusted
     Code->>Server: connect, fork the remote extension host
-    Note over Server: the host — and every terminal, task,<br/>debugger and language server it spawns —<br/>is a child of a process inside nix develop
+    Note over Server: the host — and every terminal, task,<br/>debugger and language server it spawns —<br/>is a child of a process that was inside nix develop
 
     Code->>Res: getCanonicalURI(uri) → file:// form
     Note right of Res: remote and local URIs address the same disk,<br/>so recently-opened and SCM see one file, not two
 ```
+
+One `nix develop`, not two. The extension used to enter the shell once with a script that
+dumped its environment into a temp file — which it parsed out here to learn what
+`vscodeExtensions` and `vscodeSettings` said — and then enter it a second time to start the
+server. Everything between those two entries now runs *in* the shell as `provision.js`,
+where the environment needs no shipping because it is simply the environment. What is left
+in the extension host is what has to be true before the shell is entered at all: a server
+on disk, a `node` that can start, the installable, and the directories.
+
+The script answers in two parts, and neither is scraped out of the stream: the lock file,
+and its exit code. Zero means that file describes a server that is up. So the output is
+free to be nothing but output — Nix's build log and the script's own lines, going straight
+to the terminal, with the progress notification reading the same stream one line at a time
+because it cannot render one.
+
+The server it leaves behind is detached, in a session of its own. That is what lets the
+window let go: the pty the terminal lent Nix closes when the script exits, and a server
+still on that terminal would take a SIGHUP with it. It also means the pid in the lock is
+the *server's*, leading a process group of its own — which is the group `stop` signals,
+rather than the group of a `nix develop` that exec'd away.
+
+Its pipes are read only until it names its port, and then dropped. The extension host used
+to hold them for the whole session, with a buffer growing behind them, and the server only
+lost them when the editor quit. Dropping them early is safe for this particular child and
+not in general: a bare Node process takes an uncaught `EPIPE` and dies, while the VS Code
+server goes on running — checked under load that makes it log, not assumed. It has nothing
+to lose there in any case, since its real logs go to `<serverDataDir>/data/logs/`, which it
+opens for itself.
 
 A throw inside `startOrAttach` is classified before it leaves `resolve`. Anything Nix could
 plausibly do differently next time -- a download, a builder, a port that never opened --
@@ -223,11 +225,11 @@ becomes `TemporarilyNotAvailable`, so VS Code offers a retry instead of dropping
 into an unrecoverable state. A failure to *evaluate* the flake (`isEvaluationError`) becomes
 `NotAvailable` carrying `nixErrorSummary`, because the retry that code asks for would re-run
 an evaluation that fails identically every time: the window would loop rather than land
-anywhere the user could act on. A throw also reveals the
-build terminal, so the one-line notification has the output that led to it sitting beside
-it -- the message is not written in there, only Nix's own output ever is. On success the
-terminal is disposed unless `nixDevShell.showBuildOutput` is `always`, which was a request to
-keep watching.
+anywhere the user could act on. A throw also reveals the build terminal, so the one-line
+notification has the output that led to it sitting beside it -- the message is not written
+in there, only Nix's own output and the script's ever is. On success the terminal is
+disposed unless `nixDevShell.showBuildOutput` is `always`, which was a request to keep
+watching.
 
 ## Phase 3 — the window is up
 
@@ -269,7 +271,7 @@ sequenceDiagram
         Server->>Server: timer cancelled — reloads and reopens keep this server
     else timer fires
         Server->>Server: exit
-        Note over FS: the lock stays — nothing of ours runs<br/>inside the devShell to remove it
+        Note over FS: the lock stays — the script that wrote it<br/>left as soon as the server was up
     end
 
     Code->>SM: activate() → sweep()
@@ -296,7 +298,7 @@ them gets to it: every reader tests the port before trusting what the lock says.
 | Where | What | Lifetime |
 | --- | --- | --- |
 | The authority | folder, flakeDir, devShell | as long as the window or its "recently opened" entry |
-| `server/instances/<key>.json` | port, connection token, pid, commit, profile | until a sweep, a stop or a findRunning collects it |
+| `server/instances/<key>.json` | port, connection token, the server's pid, commit, installable | until a sweep, a stop or a findRunning collects it |
 | `<folder>/.vscode/nix-devshell/<devShell>/devshell` | the Nix GC root for the built shell | until the user deletes it (`nixDevShell.profile: none` writes none) |
 
 Nothing else persists. There is no setting recording the selection, and no registry mapping

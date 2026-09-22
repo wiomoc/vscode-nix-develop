@@ -265,9 +265,8 @@ Extensions that declare both prefer `ui`. Override per extension with the standa
 { "remote.extensionKind": { "some.extension": ["workspace"] } }
 ```
 
-`Nix DevShell: Show devShell extensions (remote)` prints the server's extensions directory,
-what is installed in it, what each source declared, and where every loaded extension is
-currently running.
+What was linked, installed or refused is written to the build terminal as the devShell is
+entered, and kept in `Nix DevShell: Show log`.
 
 ## Scoping settings to a single devShell
 
@@ -334,8 +333,8 @@ rewritten when the effective settings change, so hand-written comments survive.
 Keys that do not look like settings keys are refused with a warning, and a malformed
 `vscodeSettings` costs the settings, not the window.
 
-`Nix DevShell: Show devShell extensions (remote)` lists the machine settings file and the
-keys currently in it, alongside the extensions.
+The file is `<globalStorage>/remote/data/<key>/data/Machine/settings.json`, and VS Code
+shows it as the "Remote [devShell]" settings tab.
 
 ## Window labelling
 

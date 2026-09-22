@@ -2,11 +2,16 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { computeDelta } from "../src/environment";
-import type { EnvDelta } from "../src/environment";
 import type { NixDevShellConfig } from "../src/config";
-import type { CaptureResult } from "../src/nix";
-import { captureEnv, currentSystem, listDevShells, toInstallable } from "../src/nix";
+import {
+  BUILD_LOG_FORMAT,
+  currentSystem,
+  developCommand,
+  listDevShells,
+  plainText,
+  toInstallable,
+} from "../src/nix";
+import { run, type TtyOptions } from "../src/utils/run-subprocess";
 import * as stub from "./activation-stub";
 import { forgetPty } from "../src/utils/pty";
 
@@ -53,29 +58,79 @@ const FLAKE = `{
  * Exercises the real `nix` CLI, which needs a network-capable Nix and takes minutes on a
  * cold store -- hence the `e2e` tag, which is what keeps it out of a plain `npm test`.
  *
- * The build itself happens once, in `beforeAll`: it is minutes of work, and everything
- * below is a question about the same captured environment.
+ * What is under test is the one call a window now makes: `developCommand` assembles the
+ * argv, `run` carries it out, and whatever was named after `--command` runs *inside* the
+ * built shell. `ServerManager.start` does exactly this with `dist/provision.js` as the
+ * command; here it is a `bash -c` that prints what it can see, which is the same question
+ * asked in a form a test can read.
  */
 describe("nix (end-to-end)", { tags: ["e2e"] }, () => {
   let dir: string;
   let system: string;
   let installable: string;
-  let capture: CaptureResult;
-  let delta: EnvDelta;
+  let profile: string;
+  /** What the command saw from inside the shell, as `NAME=value` lines. */
+  let inside: Record<string, string>;
   const streamed: string[] = [];
   const progressed: string[] = [];
+
+  /** Run `script` inside the devShell, the way `ServerManager.start` runs its bundle. */
+  async function develop(
+    script: string,
+    sink: { onOutput?: (chunk: string) => void; tty?: TtyOptions } = {},
+  ): Promise<string> {
+    const { exe, args } = await developCommand(cfg, {
+      installable,
+      profile,
+      command: ["bash", "-c", script],
+      logFormat: BUILD_LOG_FORMAT,
+    });
+    const result = await run(exe, args, {
+      cwd: dir,
+      timeoutMs: cfg.buildTimeoutSeconds * 1000,
+      onStdout: sink.onOutput,
+      onStderr: sink.onOutput,
+      tty: sink.tty,
+    });
+    // A pty has one stream, so what the command printed lands in `stderr` there and in
+    // `stdout` over a pipe. Both are searched rather than assuming which run this was.
+    return `${result.stdout}\n${result.stderr}`;
+  }
 
   beforeAll(async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), "nix-devshell-e2e-"));
     system = await currentSystem(cfg, dir);
-    await fs.writeFile(path.join(dir, "flake.nix"), FLAKE.replace("@SYSTEM@", system));
+    await fs.writeFile(
+      path.join(dir, "flake.nix"),
+      FLAKE.replace("@SYSTEM@", system),
+    );
 
     installable = toInstallable("default", dir, system);
-    capture = await captureEnv(cfg, installable, dir, path.join(dir, ".profile", "devshell"), {
-      onOutput: (chunk) => streamed.push(chunk),
-      onProgress: (line) => progressed.push(line),
-    });
-    delta = computeDelta(capture);
+    profile = path.join(dir, ".profile", "devshell");
+
+    // One build, then questions about it. `MARK:` is a prefix nothing in a Nix build log
+    // uses, so the answers can be picked out of a stream that also carries the build.
+    const output = await develop(
+      'for v in MY_VAR FROM_HOOK PATH HOME; do printf "MARK:%s=%s\\n" "$v" "${!v}"; done',
+      {
+        onOutput: (chunk) => {
+          streamed.push(chunk);
+          for (const line of chunk.split("\n")) {
+            const text = plainText(line);
+            if (text) progressed.push(text);
+          }
+        },
+      },
+    );
+
+    inside = {};
+    for (const line of output.split("\n")) {
+      const marked = line.indexOf("MARK:");
+      if (marked < 0) continue;
+      const entry = line.slice(marked + "MARK:".length).trimEnd();
+      const eq = entry.indexOf("=");
+      if (eq > 0) inside[entry.slice(0, eq)] = entry.slice(eq + 1);
+    }
   });
 
   afterAll(async () => {
@@ -83,12 +138,34 @@ describe("nix (end-to-end)", { tags: ["e2e"] }, () => {
   });
 
   it("resolves the current system", () => {
-    expect(/^[a-z0-9_]+-[a-z]+$/.test(system), `unexpected system double: ${system}`).toBe(true);
+    expect(
+      /^[a-z0-9_]+-[a-z]+$/.test(system),
+      `unexpected system double: ${system}`,
+    ).toBe(true);
   });
 
   it("discovers every devShell in the flake", async () => {
     const shells = await listDevShells(cfg, dir, system);
     expect(shells.map((s) => s.name).sort()).toEqual(["ci", "default"]);
+  });
+
+  it("--command runs inside the shell, with the mkShell attributes set", () => {
+    expect(inside.MY_VAR).toEqual("hello-world");
+  });
+
+  it("the shellHook has run by the time the command starts", () => {
+    expect(
+      inside.FROM_HOOK,
+      "the shellHook must have been executed before --command",
+    ).toEqual("1");
+  });
+
+  it("packages land on PATH as a prepended prefix", () => {
+    expect(inside.PATH, "hello should be on PATH").toContain("hello");
+  });
+
+  it("the build-time HOME never reaches the command", () => {
+    expect(inside.HOME).toEqual(process.env.HOME);
   });
 
   it("the build is streamed as it happens, not collected at the end", () => {
@@ -101,7 +178,17 @@ describe("nix (end-to-end)", { tags: ["e2e"] }, () => {
     ).toContain("a noisy banner on stdout");
   });
 
-  // The same build again, this time with a terminal to write to. Everything Nix withholds
+  it("the notification sink sees plain text, never escape codes", () => {
+    const escaped = progressed.filter((l) => l.includes("\u001b"));
+    expect(escaped, "a progress notification would print these literally").toEqual([]);
+  });
+
+  it("the profile is created as a GC root", async () => {
+    const link = await fs.readlink(profile);
+    expect(link.length > 0, "profile symlink should exist").toBe(true);
+  });
+
+  // The same shell again, this time with a terminal to write to. Everything Nix withholds
   // over a pipe -- colour, and the progress bar it redraws in place -- depends on this and
   // on nothing else, so it is worth proving against the real CLI rather than assuming.
   // `NIX_DEVSHELL_APP_ROOT` is an installed VS Code's `resources/app`, which is where the
@@ -115,7 +202,7 @@ describe("nix (end-to-end)", { tags: ["e2e"] }, () => {
       forgetPty();
       const previousAppRoot = stub.env.appRoot;
       stub.env.appRoot = appRoot;
-      await captureEnv(cfg, installable, dir, path.join(dir, ".profile", "devshell"), {
+      await develop('printf "MARK:TTY=%s\\n" "$MY_VAR"', {
         onOutput: (chunk) => coloured.push(chunk),
         tty: { columns: 100, rows: 30 },
       });
@@ -125,54 +212,18 @@ describe("nix (end-to-end)", { tags: ["e2e"] }, () => {
 
     it("Nix colours its output and draws its bar", () => {
       const text = coloured.join("");
-      expect(text, "no escape codes: Nix still thinks it is writing to a pipe").toContain("\u001b[");
+      expect(
+        text,
+        "no escape codes: Nix still thinks it is writing to a pipe",
+      ).toContain("\u001b[");
       expect(text, "the progress bar redraws with carriage returns").toContain("\r");
     });
 
     it("the pipe path really was the plain one", () => {
       expect(
         streamed.join("").includes("\u001b["),
-        "the earlier capture had no terminal, so it should have had no colour",
+        "the earlier run had no terminal, so it should have had no colour",
       ).toBe(false);
     });
-  });
-
-  it("the notification sink sees plain text, never escape codes", () => {
-    const escaped = progressed.filter((l) => l.includes("\u001b"));
-    expect(escaped, "a progress notification would print these literally").toEqual([]);
-  });
-
-  it("shellHook side effects are captured", () => {
-    expect(delta.replace.get("FROM_HOOK"), "the shellHook must have been executed").toEqual("1");
-  });
-
-  it("mkShell attributes become environment variables", () => {
-    expect(delta.replace.get("MY_VAR")).toEqual("hello-world");
-  });
-
-  it("shellHook stdout does not leak into the captured environment", () => {
-    const polluted = [...delta.replace.keys()].filter((k) => k.includes("noisy") || k.includes("banner"));
-    expect(polluted, "banner text must not be parsed as variables").toEqual([]);
-  });
-
-  it("packages land on PATH as a prepended prefix", () => {
-    const prefix = delta.prepend.get("PATH");
-    expect(prefix, "PATH should be a prepend, not a replace").toBeTruthy();
-    expect(prefix, "hello should be on PATH").toContain("hello");
-    expect(
-      prefix!.includes(capture.baseline.PATH!),
-      "the host PATH must not be duplicated into the prefix",
-    ).toBe(false);
-  });
-
-  it("build-time HOME and TMPDIR never reach the result", () => {
-    expect(delta.replace.has("HOME"), "HOME must not be overridden").toBe(false);
-    expect(delta.replace.has("TMPDIR"), "the scratch TMPDIR must not be exported").toBe(false);
-    expect(delta.replace.has("out"), "derivation outputs must not be exported").toBe(false);
-  });
-
-  it("the profile is created as a GC root", async () => {
-    const link = await fs.readlink(path.join(dir, ".profile", "devshell"));
-    expect(link.length > 0, "profile symlink should exist").toBe(true);
   });
 });

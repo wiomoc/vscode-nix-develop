@@ -1,10 +1,8 @@
 import * as fsPromises from "node:fs/promises";
 import * as path from "node:path";
-import * as vscode from "vscode";
-import type { CaptureResult } from "../nix";
-import { log } from "../utils/log";
+import { log } from "./log";
 import { exists, isDirectory } from "../utils/fs-stat";
-import { run } from "../utils/run-subprocess";
+import { run } from "./run";
 import { syncManifest } from "./extensions-manifest";
 
 /**
@@ -47,7 +45,7 @@ export interface DeclaredExtensions {
 
 /** What the devShell declares, in declaration order and without duplicates. */
 export function collectExtensions(
-  devShellEnv: Record<string, string>,
+  devShellEnv: Record<string, string | undefined>,
 ): DeclaredExtensions {
   const ids: string[] = [];
   const paths: string[] = [];
@@ -109,7 +107,8 @@ export async function ensureInstalled(opts: {
   serverDataDir: string;
   flakeDir: string;
   wanted: string[];
-  progress?: (m: string) => void;
+  /** How long one install may take; see `ProvisionOptions.installTimeoutSeconds`. */
+  timeoutMs?: number;
 }): Promise<{ installed: string[]; failed: string[] }> {
   const present = new Set(
     (await installedIn(opts.extensionsDir)).map((id) => id.toLowerCase()),
@@ -119,9 +118,8 @@ export async function ensureInstalled(opts: {
   );
   if (missing.length === 0) return { installed: [], failed: [] };
 
-  log.info(`installing into ${opts.extensionsDir}: ${missing.join(", ")}`);
-  opts.progress?.(
-    `Installing ${missing.length} extension(s) into the devShell…`,
+  log.info(
+    `installing ${missing.length} extension(s) into ${opts.extensionsDir}: ${missing.join(", ")}`,
   );
 
   const installed: string[] = [];
@@ -141,7 +139,7 @@ export async function ensureInstalled(opts: {
           "--install-extension",
           id,
         ],
-        { cwd: opts.flakeDir, timeoutMs: 300_000 },
+        { cwd: opts.flakeDir, timeoutMs: opts.timeoutMs ?? 300_000 },
       );
       installed.push(id);
       log.info(`installed ${id}`);
@@ -299,34 +297,36 @@ export async function syncNixExtensions(
 
 /**
  * Resolve the devShell's declared extensions and install the missing ones.
+ *
+ * The environment read here is this process's own: the script runs inside `nix develop`,
+ * so `vscodeExtensions` is simply there. Nothing has to be dumped, shipped across a
+ * process boundary and parsed back -- which is what the extension host used to do.
+ *
+ * A failure costs the extension, never the window: the server starts either way, and what
+ * went wrong is on the stream the build terminal is showing.
  */
 export async function installDeclaredExtensions(opts: {
   launcher: string;
   extensionsDir: string;
   serverDataDir: string;
   flakeDir: string;
-  capture: CaptureResult | undefined;
-  progress: (m: string) => void;
+  devShellEnv: Record<string, string | undefined>;
+  installTimeoutMs: number;
 }): Promise<void> {
-  const declared = collectExtensions(opts.capture?.inside ?? {});
+  const declared = collectExtensions(opts.devShellEnv);
 
   // Extensions the devShell supplies as Nix packages are already built: they only need
   // linking into the extension directory, with no download and no version drift.
-  if (opts.capture) {
-    const nixExtensions = await resolveNixExtensions(declared.paths);
-    if (nixExtensions.length > 0) {
-      opts.progress(
-        `Linking ${nixExtensions.length} Nix-built extension(s)\u2026`,
-      );
-      log.info(
-        `devShell supplies via Nix: ${nixExtensions.map((e) => e.id).join(", ")}`,
-      );
-    }
-    // Runs even when the set is empty: that is what unlinks what the flake dropped.
-    await syncNixExtensions(opts.extensionsDir, nixExtensions).catch((err) =>
-      log.warn(`could not link Nix-built extensions: ${(err as Error).message}`),
+  const nixExtensions = await resolveNixExtensions(declared.paths);
+  if (nixExtensions.length > 0) {
+    log.info(
+      `devShell supplies via Nix: ${nixExtensions.map((e) => e.id).join(", ")}`,
     );
   }
+  // Runs even when the set is empty: that is what unlinks what the flake dropped.
+  await syncNixExtensions(opts.extensionsDir, nixExtensions).catch((err) =>
+    log.warn(`could not link Nix-built extensions: ${(err as Error).message}`),
+  );
 
   const wanted = declared.ids;
   if (wanted.length === 0) return;
@@ -339,11 +339,11 @@ export async function installDeclaredExtensions(opts: {
     serverDataDir: opts.serverDataDir,
     flakeDir: opts.flakeDir,
     wanted,
-    progress: opts.progress,
+    timeoutMs: opts.installTimeoutMs,
   });
+  // `log.warn` rather than a notification: there is no `vscode` here. The extension host
+  // counts the warnings it sees go past and raises the one notification that covers them.
   if (failed.length > 0) {
-    void vscode.window.showWarningMessage(
-      `Could not install into the devShell: ${failed.join(", ")}. See the Nix DevShell log.`,
-    );
+    log.warn(`could not install into the devShell: ${failed.join(", ")}`);
   }
 }
