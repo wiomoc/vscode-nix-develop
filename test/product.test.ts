@@ -6,11 +6,8 @@ import { readProduct, serverDownloadUrl, clientProduct, forgetProduct } from "..
 import * as stub from "./activation-stub";
 
 /**
- * Detecting which editor is running, and therefore which server matches it.
- *
- * The VSCodium values here are copied verbatim out of the `product.json` in
- * `vscodium-reh-linux-x64-1.135.06055.tar.gz`, so what is asserted is the real shape of a
- * real release rather than a guess at one.
+ * Detecting which editor is running. VSCodium values are copied from the `product.json` in
+ * `vscodium-reh-linux-x64-1.135.06055.tar.gz`.
  */
 
 const VSCODIUM = {
@@ -70,9 +67,7 @@ describe("product detection", () => {
     expect(p.serverDataFolderName).toEqual(".vscode-server");
   });
 
-  // `serverDownloadUrl` asks `clientProduct()` for the running editor rather than taking a
-  // product, so these put the product in place the way the extension finds it, and put back
-  // whatever the rest of the file expects to find once they are done.
+  // `serverDownloadUrl` reads the running editor's product, so these swap it in and back.
   describe("the URL the running editor implies", () => {
     const previousAppRoot = stub.env.appRoot;
     afterAll(() => {
@@ -128,9 +123,7 @@ describe("product detection", () => {
     });
 
     it("callers racing the first read share it instead of repeating it", async () => {
-      // The memo holds the promise, not the result. Caching only the result would let every
-      // caller that arrives before the first read finishes start a read of its own; they
-      // would agree on the answer but each pay for it. Same object means one read.
+      // Concurrent callers share one read: the memo holds the promise.
       stub.env.appRoot = await appRoot("racing", VSCODIUM);
       forgetProduct();
       const [a, b, c] = await Promise.all([clientProduct(), clientProduct(), clientProduct()]);

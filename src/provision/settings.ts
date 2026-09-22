@@ -2,26 +2,12 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { log } from "./log";
 
-/**
- * Editor settings, as they appear in a `settings.json`.
- *
- * Declared here rather than in `config.ts`, which this side of the extension cannot
- * import: that module reads the editor's configuration and so pulls `vscode` in with it.
- */
+/** Editor settings, as in a `settings.json`. Not in `config.ts`, which imports `vscode`. */
 export type SettingsMap = Record<string, unknown>;
 
 /**
- * Per-devShell editor settings.
- *
- * The companion of per-devShell extensions: an extension pinned by the flake is of little
- * use if the editor still points at a binary from the host. A devShell knows where its own
- * tools live, so it can say so -- `nix.serverPath`, `rust-analyzer.server.path`,
- * `python.defaultInterpreterPath` -- and the setting is then as reproducible as the
- * toolchain it names.
- *
- * They are declared by the devShell itself, mirroring `vscodeExtensions`: a `vscodeSettings`
- * attribute on `mkShell`. Derivation attributes are strings, so an attrset has to be
- * spelled as JSON:
+ * Per-devShell editor settings, so tool paths like `nix.serverPath` can point into the
+ * devShell. Declared like `vscodeExtensions`, as a JSON string on `mkShell`:
  *
  *     pkgs.mkShell {
  *       packages = [ pkgs.nil ];
@@ -31,36 +17,20 @@ export type SettingsMap = Record<string, unknown>;
  *       };
  *     }
  *
- * A `key=value` line per setting is accepted too, which is what a plain Nix list or a
- * multi-line string yields.
+ * `key=value` lines are accepted too.
  *
- * The values land in the *server's* machine settings file, which is per devShell for the
- * same reason the extension directory is: it lives under `--server-data-dir`. That is the
- * file VS Code shows as "Remote [devShell]" settings, and it outranks user settings while
- * still yielding to the workspace's own `.vscode/settings.json` -- so a devShell can point
- * the editor at its toolchain without the repository having to carry machine-specific
- * paths, and without anything being written into the workspace.
+ * The values go into the server's per-devShell machine settings ("Remote [devShell]"),
+ * which override user settings but yield to the workspace's `.vscode/settings.json`.
  */
 const FLAKE_SETTINGS_VARS = ["vscodeSettings", "VSCODE_SETTINGS"];
 
-/**
- * A settings key: dotted (`nix.serverPath`) or a language override (`[nix]`).
- *
- * The point is not to know VS Code's settings -- extensions contribute their own -- but to
- * refuse anything that plainly is not one, so a stray word in the environment variable is
- * reported rather than written into the editor's configuration.
- */
+/** A plausible settings key: dotted (`nix.serverPath`) or a language override (`[nix]`). */
 const SETTING_KEY =
   /^(\[[A-Za-z0-9_+#.-]+\]|[A-Za-z0-9][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)+)$/;
 
 /**
- * Parse one `vscodeSettings` value.
- *
- * JSON is the form to reach for -- `builtins.toJSON` renders any attrset, nested values
- * included. The `key=value` form exists because Nix makes strings out of everything else:
- * a list arrives space-separated on one line, a multi-line string arrives as it was
- * written, and both should mean the obvious thing. A line whose words are *all* `key=value`
- * is therefore read as several settings; otherwise it is one setting whose value may
+ * Parse one `vscodeSettings` value: a JSON object, or `key=value` lines. A line whose
+ * words are all `key=value` (a Nix list) is several settings; otherwise the value may
  * contain spaces.
  */
 export function parseFlakeSettings(raw: string, source = "vscodeSettings"): SettingsMap {
@@ -100,12 +70,7 @@ export function parseFlakeSettings(raw: string, source = "vscodeSettings"): Sett
   return validate(pairs, source);
 }
 
-/**
- * `true`, `42` and `["a"]` mean what they say; anything else is the string it looks like.
- *
- * Store paths are the common case here and must survive verbatim, so a failed parse is not
- * an error -- it is the answer.
- */
+/** `true`, `42` and `["a"]` are parsed as JSON; anything else stays a string. */
 function scalar(value: string): unknown {
   try {
     return JSON.parse(value);
@@ -140,13 +105,7 @@ export function collectSettings(
   return values;
 }
 
-/**
- * The server's machine settings file.
- *
- * `--server-data-dir <dir>` makes `<dir>/data` the server's user-data directory, and VS
- * Code reads machine settings from `Machine/settings.json` inside it. Since the data
- * directory is chosen per devShell, so is this file.
- */
+/** The server's machine settings file, under its per-devShell `--server-data-dir`. */
 export function machineSettingsPath(serverDataDir: string): string {
   return path.join(serverDataDir, "data", "Machine", "settings.json");
 }
@@ -156,13 +115,7 @@ function managedPath(serverDataDir: string): string {
   return path.join(serverDataDir, "data", "Machine", "nix-devshell.managed.json");
 }
 
-/**
- * Read a settings file that VS Code may also have written.
- *
- * It is JSON with comments, and the comments are the user's: the file is editable from the
- * "Remote" settings tab. Stripping them has to be string-aware, or a `//` inside a path or
- * URL would truncate the line.
- */
+/** Parse JSON with comments; string-aware, so a `//` inside a URL survives. */
 export function parseJsonc(text: string): SettingsMap {
   let out = "";
   let inString = false;
@@ -208,11 +161,8 @@ export function parseJsonc(text: string): SettingsMap {
 }
 
 /**
- * The settings currently in this devShell's machine settings file.
- *
- * `undefined` is not the same answer as `{}`: a file that is there but cannot be read has
- * contents we are simply blind to, and a caller about to rewrite it must not mistake that
- * for an empty file. A missing file is the ordinary first-run case and reads as empty.
+ * The current machine settings: `{}` when missing, `undefined` when unreadable, so a
+ * caller never overwrites contents it could not see.
  */
 async function readMachineSettings(
   serverDataDir: string,
@@ -228,16 +178,9 @@ async function readMachineSettings(
 }
 
 /**
- * Put the declared settings into this devShell's machine settings file.
- *
- * Only the keys we declared are ours. Everything else in the file was put there by the
- * user -- the file is reachable from the settings UI as "Remote [devShell]" -- and is left
- * alone, including keys we wrote on an earlier run and the flake still declares. Keys the
- * flake has *stopped* declaring are removed, which is what makes deleting a line from the
- * flake take effect rather than leaving the old value behind forever.
- *
- * The file is only rewritten when the result differs, so a run that changes nothing also
- * preserves whatever comments the user's own edits left in it.
+ * Put the declared settings into the machine settings file. Other keys belong to the
+ * user and are kept; keys the flake no longer declares are removed. The file is only
+ * rewritten when its values change.
  */
 export async function applyMachineSettings(
   serverDataDir: string,
@@ -248,8 +191,6 @@ export async function applyMachineSettings(
 
   const existing = await readMachineSettings(serverDataDir);
   if (existing === undefined) {
-    // Rewriting a file we could not read would discard settings the user can see in the
-    // UI, which is worse than the devShell's settings not being applied.
     log.warn(`not applying devShell settings: ${file} is unreadable`);
     return { written: [], removed: [] };
   }
@@ -277,8 +218,7 @@ export async function applyMachineSettings(
     return { written: [], removed: [] };
   }
 
-  // Compared as values, not as text: the file is editable from the settings UI, and a run
-  // that changes nothing should leave the user's own formatting and comments intact.
+  // Compared as values, so an unchanged file keeps the user's formatting and comments.
   if (JSON.stringify(next) !== JSON.stringify(existing)) {
     const body = `${JSON.stringify(next, null, 2)}\n`;
     await fs.mkdir(path.dirname(file), { recursive: true });
@@ -296,12 +236,8 @@ export async function applyMachineSettings(
 }
 
 /**
- * Write the devShell's declared editor settings into the server's machine settings.
- *
- * This runs before the server starts, so the extension host reads them on its first pass
- * rather than reloading a moment later. As with extensions, a failure here is logged and
- * the window still opens: a bad `vscodeSettings` attribute should cost the settings, not
- * the devShell.
+ * Write the devShell's declared settings before the server starts. Failures are logged,
+ * never fatal.
  */
 export async function applyDeclaredSettings(opts: {
   serverDataDir: string;

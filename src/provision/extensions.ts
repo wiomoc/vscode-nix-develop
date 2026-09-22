@@ -6,16 +6,8 @@ import { run } from "./run";
 import { syncManifest } from "./extensions-manifest";
 
 /**
- * Per-devShell extension sets.
- *
- * A remote window loads `workspace`-kind extensions from the *server's* `--extensions-dir`,
- * not from the local install. Pointing that directory at a per-devShell path is therefore
- * all it takes to scope a set of extensions to one devShell: two devShells in the same repo
- * get genuinely separate extension sets, and neither disturbs the local window.
- *
- * Which extensions belong to a devShell is declared by the devShell itself, in a
- * `vscodeExtensions` list. `mkShell` turns a Nix list attribute into a space-separated
- * environment variable, and a derivation in that list stringifies to its store path, so
+ * Per-devShell extension sets. The server's `--extensions-dir` is per devShell, and the
+ * devShell declares its extensions itself:
  *
  *     pkgs.mkShell {
  *       vscodeExtensions = [
@@ -25,10 +17,7 @@ import { syncManifest } from "./extensions-manifest";
  *     }
  *
  * arrives as `vscodeExtensions="/nix/store/...-nix-ide-0.5.13 rust-lang.rust-analyzer"`.
- * The two forms are told apart by shape -- a store path is absolute, an id is not -- and
- * handled differently: a package is already built, so it is linked, while an id has to be
- * downloaded. The toolchain and the editor support for it are then declared and versioned
- * in the same expression, which is the whole point of putting the shell in the flake.
+ * Absolute store paths are linked; ids are installed from the Marketplace.
  */
 const FLAKE_EXTENSION_VARS = ["vscodeExtensions", "VSCODE_EXTENSIONS"];
 
@@ -95,12 +84,7 @@ export async function installedIn(extensionsDir: string): Promise<string[]> {
   }
 }
 
-/**
- * Install any declared extension that is not already present.
- *
- * Failures are logged rather than thrown: a typo in a flake attribute, or an extension
- * that is unavailable offline, should not stop the devShell window from opening.
- */
+/** Install any declared extension that is not already present. Failures are only logged. */
 export async function ensureInstalled(opts: {
   launcher: string;
   extensionsDir: string;
@@ -151,13 +135,7 @@ export async function ensureInstalled(opts: {
   return { installed, failed };
 }
 
-/**
- * Each devShell gets its own extension directory, keyed by the authority (folder + devShell).
- *
- * That is what makes a devShell's extension set actually *be* the devShell's: what the flake
- * declares is what is there, and nothing another shell installed leaks in. It also makes the
- * set safe to prune, since a sync only ever runs when this devShell has no server.
- */
+/** Each devShell gets its own extension directory, keyed by folder + devShell. */
 export function extensionsDirFor(root: string, key: string): string {
   return path.join(root, "extensions", key);
 }
@@ -173,18 +151,10 @@ export interface NixExtension {
 }
 
 /**
- * Extensions a devShell supplies through Nix rather than the Marketplace.
- *
- * Both `pkgs.vscode-extensions` (nixpkgs' own curated set) and `nix-vscode-extensions`
- * (almost every Marketplace / Open VSX extension) build an extension as
- * `$out/share/vscode/extensions/<publisher>.<name>`, so a package named in
- * `vscodeExtensions` needs no convention beyond the one they already follow: look under
- * that prefix and take what is there. The devShell can pin its editor tooling in the
- * flake, with no download at activation time and the same versions for everyone.
- *
- * A path that yields nothing is warned about and skipped: a package that turns out not to
- * hold an extension should cost that entry, not the window. A duplicate id keeps the
- * first declaration, so a package named twice is linked once.
+ * Extensions supplied as Nix packages, found under
+ * `$out/share/vscode/extensions/<publisher>.<name>` (the layout of both
+ * `pkgs.vscode-extensions` and `nix-vscode-extensions`). Paths without one are warned
+ * about and skipped; duplicates keep the first.
  */
 export async function resolveNixExtensions(
   storePaths: string[],
@@ -208,11 +178,8 @@ export async function resolveNixExtensions(
 }
 
 /**
- * Is this a symlink we created, pointing at a Nix-built extension?
- *
- * Identified by shape rather than by a `/nix/store` prefix: the store path is
- * configurable, and what actually distinguishes these links is that they point at
- * `.../share/vscode/extensions/<same name>`.
+ * A symlink we created to a Nix-built extension, matched by shape rather than a
+ * `/nix/store` prefix, since the store path is configurable.
  */
 const EXTENSION_SHARE_PATH = /\/share\/vscode\/extensions\/([^/]+)\/?$/;
 
@@ -232,16 +199,9 @@ async function managedLink(
 }
 
 /**
- * Make the extension directory match the devShell's Nix-supplied extensions exactly.
- *
- * Removal is safe because the directory belongs to a single devShell and a sync only runs
- * when that devShell has no server: nothing can be pulled out from under a live extension
- * host. Real directories are never touched -- those came from the Marketplace and are not
- * ours to remove.
- *
- * The server's own record of the directory is part of what has to match, so it is written
- * here too: a link the record does not name is marked for removal on the next start. See
- * `extensions-manifest.ts` for why that cannot be left to the server.
+ * Make the extension directory's symlinks match the Nix-supplied extensions. Safe
+ * because it only runs while the devShell has no server; real (Marketplace) directories
+ * are never touched. Also updates the server's record; see `extensions-manifest.ts`.
  */
 export async function syncNixExtensions(
   extensionsDir: string,
@@ -296,14 +256,8 @@ export async function syncNixExtensions(
 }
 
 /**
- * Resolve the devShell's declared extensions and install the missing ones.
- *
- * The environment read here is this process's own: the script runs inside `nix develop`,
- * so `vscodeExtensions` is simply there. Nothing has to be dumped, shipped across a
- * process boundary and parsed back -- which is what the extension host used to do.
- *
- * A failure costs the extension, never the window: the server starts either way, and what
- * went wrong is on the stream the build terminal is showing.
+ * Resolve the devShell's declared extensions (from this process's environment, inside
+ * `nix develop`) and install the missing ones. Failures never stop the server.
  */
 export async function installDeclaredExtensions(opts: {
   launcher: string;

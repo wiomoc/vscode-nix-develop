@@ -8,13 +8,7 @@ const ROOT = path.resolve(import.meta.dirname, "..");
 /** `c.get<T>("name", <default>)` in config.ts, capturing the name and the default. */
 const READ = /c\.get<[^>]+>\(\s*"([^"]+)"\s*,\s*([\s\S]*?)\s*\)(?:\s*\|\||\s*,|\s*\))/g;
 
-/**
- * Parse the default expression as far as a manifest default can be compared to it.
- *
- * `config.ts` writes defaults as TypeScript, so only the literal forms a `package.json`
- * default can also take are interesting; anything else (a call, a concatenation) is
- * reported as unknown and skipped rather than guessed at.
- */
+/** Parse a literal default from `config.ts`; anything else is `undefined` and skipped. */
 function literal(expr: string): unknown {
   const trimmed = expr.trim().replace(/\.trim\(\)$/, "");
   if (trimmed === "true") return true;
@@ -25,13 +19,7 @@ function literal(expr: string): unknown {
   return undefined;
 }
 
-/**
- * The manifest and `readConfig` are two independent declarations of the same settings, and
- * nothing at compile time relates them: a setting can be contributed and never read, or
- * read and never contributed, and either way it silently does nothing. That has bitten
- * this project more than once -- `respectDirenv` was read but never declared -- and it is
- * the shape a half-finished removal takes too.
- */
+/** package.json and `readConfig` must declare the same settings with the same defaults. */
 const pkg = JSON.parse(await fs.readFile(path.join(ROOT, "package.json"), "utf8"));
 const source = await fs.readFile(path.join(ROOT, "src", "config.ts"), "utf8");
 

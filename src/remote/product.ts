@@ -4,18 +4,8 @@ import * as vscode from "vscode";
 import { log } from "../utils/log";
 
 /**
- * The parts of the running editor's `product.json` that decide which server to fetch.
- *
- * Everything this extension needs in order to work against VSCodium instead of Microsoft's
- * build is written down by the editor itself, so nothing here identifies a product by name.
- * VSCodium is not special-cased; it is simply a product whose `product.json` says its
- * server is called `codium-server` and lives on GitHub. The same reading makes Code - OSS,
- * Insiders and other rebuilds work for free.
- *
- * This must be read on the *client* side. A devShell window's extension host has an
- * `appRoot` inside the server, whose `product.json` describes the server rather than the
- * editor that has to match it -- but resolving an authority is the client's job, so the
- * resolver reads the right one.
+ * The parts of the running editor's `product.json` that decide which server to fetch, so
+ * VSCodium and other rebuilds work without special-casing. Must be read on the client.
  */
 export interface ClientProduct {
   /** `code-server`, `codium-server`: the launcher's name inside the distribution's `bin/`. */
@@ -24,13 +14,7 @@ export interface ClientProduct {
   serverDataFolderName: string;
   /** Where its CLI keeps state, e.g. `.vscode` or `.vscode-oss`. */
   dataFolderName: string;
-  /**
-   * The product's own answer to "where do I download a matching server?".
-   *
-   * VSCodium ships one, fully resolved down to its release tag. Microsoft's desktop
-   * `product.json` does not -- there the URL lives in the CLI -- so its absence is normal
-   * and means the built-in default applies.
-   */
+  /** Where to download a matching server. VSCodium sets it; Microsoft's build does not. */
   serverDownloadUrlTemplate?: string;
   quality: string;
   version: string;
@@ -48,31 +32,15 @@ const MICROSOFT: ClientProduct = {
   nameLong: "Visual Studio Code",
 };
 
-/**
- * Microsoft's desktop build does not carry a `serverDownloadUrlTemplate`, so this is the
- * one piece of product knowledge that cannot be read off disk. Spelled with the same
- * `${os}`/`${arch}` placeholders a `product.json` template uses.
- */
+/** The default for Microsoft's build, which has no `serverDownloadUrlTemplate`. */
 const MICROSOFT_SERVER_URL =
   "https://update.code.visualstudio.com/commit:${commit}/server-${os}-${arch}/${quality}";
 
 let cached: Promise<ClientProduct> | undefined;
 
 /**
- * The running editor's product description.
- *
- * Memoised, because it cannot change while the window is open and it sits on the path to
- * opening a devShell window. What is kept is the *promise*, so that callers arriving while
- * the first read is still in flight join it instead of starting their own -- caching only
- * the result would let a burst of callers each read the file.
- *
- * Safe to cache a promise here because `readProduct` does not reject: an unreadable
- * `product.json` resolves to the Microsoft defaults rather than failing, so there is no
- * rejection to get stuck on.
- *
- * There is deliberately no way to ask for a different `appRoot`: with one memo there is one
- * running editor, and a parameter would only be honoured for whoever called first. Tests
- * that need a specific `product.json` call `readProduct` directly.
+ * The running editor's product description. The promise is memoised, so concurrent
+ * callers share one read; `readProduct` never rejects. Tests call `readProduct` directly.
  */
 export function clientProduct(): Promise<ClientProduct> {
   cached ??= (async () => {
@@ -125,12 +93,7 @@ export function forgetProduct(): void {
   cached = undefined;
 }
 
-/**
- * The OS and architecture names a server distribution is labelled with.
- *
- * Both products spell these the same way, which is why one mapping serves both: VSCodium's
- * release assets are `vscodium-reh-linux-x64-…` next to Microsoft's `server-linux-x64`.
- */
+/** The OS and architecture names server distributions use (same for both products). */
 export function serverOsArch(): { os: string; arch: string } {
   const arch =
     process.arch === "arm64" ? "arm64" : process.arch === "arm" ? "armhf" : "x64";
@@ -141,12 +104,7 @@ export function serverOsArch(): { os: string; arch: string } {
   return { os: "linux", arch };
 }
 
-/**
- * Fill in a server download template.
- *
- * `${os}`/`${arch}` are what a `product.json` template uses; `${platform}` is the spelling
- * this extension's own setting has always used, kept so an existing override keeps working.
- */
+/** Fill in a server download template's `${...}` placeholders. */
 function expandServerUrl(
   template: string,
   values: { commit: string; quality: string; version: string },
@@ -162,15 +120,8 @@ function expandServerUrl(
 }
 
 /**
- * Where to fetch a server matching `commit`.
- *
- * `configured` is `nixDevShell.remote.serverDownloadUrl`, and it wins when it is set, since
- * overriding exactly this is what it exists for. Otherwise the product is asked: VSCodium's
- * `product.json` carries a `serverDownloadUrlTemplate` pointing at its own GitHub release,
- * with the release tag already resolved, which is what makes it work with no configuration
- * at all. Microsoft's desktop build carries none -- there the URL lives in the CLI, not the
- * `product.json` -- so the built-in default stands in, and that default is Microsoft's
- * update server.
+ * Where to fetch a server matching `commit`: `nixDevShell.remote.serverDownloadUrl` if
+ * set, else the product's template, else Microsoft's update server.
  */
 export async function serverDownloadUrl(
   commit: string,

@@ -5,13 +5,7 @@ import * as stub from "./activation-stub";
 import { forgetPty, loadPty } from "../src/utils/pty";
 import { afterAll, describe, expect, it } from "vitest";
 
-/**
- * Borrowing the editor's `node-pty`.
- *
- * The point of these is the *absence* of a hard dependency: every way of not finding a pty
- * has to end in `undefined` rather than a throw, because the extension host loading this
- * module is the extension host that opens windows.
- */
+/** Borrowing the editor's `node-pty`: every way of not finding one yields `undefined`. */
 const appRoot = stub.env.appRoot;
 
 afterAll(() => {

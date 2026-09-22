@@ -15,25 +15,15 @@ export interface NixDevShellConfig {
   remote: RemoteConfig;
 }
 
-/**
- * When the terminal showing `nix develop` is brought into view.
- *
- * `never` is the only value that stops the output being collected at all; the other two
- * differ in whether the terminal is revealed up front or only once there is a failure to
- * read. The default is `onFailure`, because opening a window should not steal the panel,
- * but a devShell that does not evaluate should not fail silently either.
- */
+/** When the terminal showing `nix develop` is revealed; `never` also stops collecting output. */
 export type BuildOutputMode = "never" | "onFailure" | "always";
 
 export interface RemoteConfig {
   serverDownloadUrl: string;
   connectTimeoutSeconds: number;
   /**
-   * Whether to point the server's bundled `node` at a glibc from nixpkgs with `patchelf`.
-   *
-   * Off is for a host that resolves `/lib64/ld-linux-*` on its own (`programs.nix-ld`, or
-   * simply not NixOS), where the binary is left alone and no nixpkgs build is evaluated.
-   * See `ServerManager.patchServerNode`.
+   * Whether to `patchelf` the server's bundled `node` onto a nixpkgs glibc. Off for hosts
+   * that resolve `/lib64/ld-linux-*` themselves (nix-ld, non-NixOS). See `patchServerNode`.
    */
   patchServerLd: boolean;
 }
@@ -65,20 +55,10 @@ export function flakeDir(folder: vscode.WorkspaceFolder, cfg: NixDevShellConfig)
   return path.resolve(folder.uri.fsPath, cfg.flakeDirectory);
 }
 
-/**
- * `publisher.name` from package.json -- the id `--enable-proposed-api` and the
- * `enable-proposed-api` entry in `argv.json` have to name.
- */
+/** `publisher.name` from package.json, as `enable-proposed-api` must name it. */
 export const EXTENSION_ID = "wiomoc.nix-devshell";
 
-/**
- * Whether the `resolvers` proposed API was granted this session.
- *
- * Opening a devShell window is the only thing a selected devShell does, so without the
- * resolver there is nothing to fall back to and the user has to relaunch with
- * `--enable-proposed-api`. This flag is what lets the extension say so up front rather
- * than failing when they try to reopen.
- */
+/** Whether the `resolvers` proposed API was granted, so a reopen can explain its absence. */
 let resolverAvailable = false;
 
 export function setResolverAvailable(value: boolean): void {

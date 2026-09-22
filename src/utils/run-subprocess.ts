@@ -18,22 +18,11 @@ export interface RunOptions {
   token?: vscode.CancellationToken;
   /** Streamed stderr, for surfacing build progress. */
   onStderr?: (chunk: string) => void;
-  /**
-   * Streamed stdout.
-   *
-   * Nix writes its own logs to stderr and keeps stdout for the payload, so this is not
-   * where build progress arrives -- it is where a devShell's `shellHook` banner does, and
-   * where anything `--command` prints. Only safe to stream when the caller is not reading
-   * stdout as data, which is why it is separate from `onStderr` rather than implied by it.
-   */
+  /** Streamed stdout: `shellHook` and `--command` output. Nix logs go to stderr. */
   onStdout?: (chunk: string) => void;
   /**
-   * Run under a real terminal, when the editor lends one; see `loadPty`.
-   *
-   * A pty has one stream, not two, so this changes the shape of what comes back: every
-   * byte arrives on `onStderr` and lands in `RunResult.stderr`, and `stdout` is empty.
-   * That suits a caller that is showing the output and reading its result from elsewhere;
-   * it is wrong for one that parses stdout, which is why this is opt-in.
+   * Run under a pty when the editor lends one (see `loadPty`). A pty has one stream, so
+   * everything arrives as stderr and `stdout` is empty; not for callers that parse stdout.
    */
   tty?: TtyOptions;
 }
@@ -64,13 +53,7 @@ export function run(exe: string, args: string[], opts: RunOptions): Promise<RunR
   return runInPipe(exe, args, opts);
 }
 
-/**
- * Run under a terminal, so the child believes it is talking to one.
- *
- * What this buys is entirely the child's opinion of itself: Nix draws its progress bar and
- * colours its output here and does neither over a pipe. What it costs is the split between
- * stdout and stderr, which a pty does not have -- one terminal, one stream.
- */
+/** Run under a pty, so Nix draws colours and its progress bar. stdout and stderr merge. */
 function runInPty(
   pty: PtyModule,
   exe: string,

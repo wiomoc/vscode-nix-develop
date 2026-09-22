@@ -4,30 +4,12 @@ import { log } from "./log";
 import type { NixExtension } from "./extensions";
 
 /**
- * The server's own record of what is installed in an extensions directory.
+ * The server's record of installed extensions (`extensions.json`).
  *
- * A VS Code server does not load what it finds in `--extensions-dir`; it loads what
- * `extensions.json` in that directory lists. On every start its `ExtensionsWatcher` scans
- * the directory and marks for removal everything whose `<id>-<version>` is missing from
- * that file -- recording the removal in `.obsolete`, which then hides the extension from
- * later scans as well.
- *
- * There are two ways an extension that was put there by something other than the server
- * gets into the file, and a symlink of ours meets neither:
- *
- *   - the directory is migrated wholesale into the record, but only when the record does
- *     not exist yet, which is the first server start for a devShell;
- *   - a directory that *appears while the server is running* is noticed by its file
- *     watcher and added.
- *
- * We link before the server starts, deliberately: pruning is only safe when the devShell
- * has no server, so nothing can be pulled out from under a live extension host. That puts
- * every link we make outside both paths, so the record has to be written here -- otherwise
- * a Nix-supplied extension works only if it happened to be there at the first ever start,
- * and even then only until its version changes.
- *
- * What is written stays minimal: an entry the server's validator accepts, with whatever
- * the record already held for that extension preserved.
+ * The server loads only what this file lists, and on start marks anything unlisted for
+ * removal (in `.obsolete`). It adds unlisted directories itself only when the file does
+ * not exist yet, or when they appear while it runs. Our links are made before the server
+ * starts, so we must write their entries ourselves.
  */
 
 /** The record itself: what the server reads instead of listing the directory. */
@@ -49,11 +31,8 @@ interface ProfileEntry {
 }
 
 /**
- * The server's own validity check, reproduced.
- *
- * It rejects the *whole file* when a single entry fails, which would cost the devShell
- * every extension it has -- so nothing is written until what we are about to write passes
- * the same test.
+ * The server's own validity check, reproduced: one bad entry makes it reject the whole
+ * file.
  */
 function isValidEntry(entry: unknown): entry is ProfileEntry {
   const e = entry as ProfileEntry;
@@ -89,20 +68,11 @@ async function versionOf(extensionDir: string): Promise<string | undefined> {
 }
 
 /**
- * Bring the server's record in line with the Nix extensions we linked.
+ * Bring the server's record in line with the Nix extensions we linked: existing entries
+ * are updated in place, entries for unlinked ones dropped, others left alone.
  *
- * Entries the record already holds are updated rather than replaced, so a uuid or the
- * gallery metadata an earlier install left behind survives. Entries for extensions we
- * unlinked are dropped, which is what stops the record naming a directory that is gone.
- * Everything else in the file is another installer's business and is left untouched.
- *
- * A record that does not exist yet is *not* created: that absence is what makes the server
- * migrate the directory wholesale on its next start, which picks up our links along with
- * anything else there. Writing a partial file first would take that migration away and
- * lose whatever it would have found.
- *
- * Trouble here is logged, not thrown. The extensions are linked either way, and a record
- * we cannot safely rewrite is better left as it is than replaced with a guess.
+ * A missing record is not created, so the server still imports the whole directory on
+ * its next start. Errors are logged, not thrown.
  */
 export async function syncManifest(
   extensionsDir: string,
@@ -209,12 +179,8 @@ export async function syncManifest(
 }
 
 /**
- * Take our extensions off the server's removal list.
- *
- * An extension the server marked for removal stays hidden even once the record names it
- * again, and the next cleanup deletes the directory -- so a link that was rejected on an
- * earlier start would be rejected forever. The keys are `<id>-<version>`, exactly as the
- * server writes them for an extension with no target platform of its own.
+ * Take our extensions off the server's removal list, where they would otherwise stay
+ * hidden even once listed. Keys are `<id>-<version>`, as the server writes them.
  */
 async function unmarkForRemoval(
   extensionsDir: string,

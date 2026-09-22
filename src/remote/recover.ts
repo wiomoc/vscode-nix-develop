@@ -6,22 +6,12 @@ import { log } from "../utils/log";
 import type { RemoteTarget } from "./authority";
 
 /**
- * Where the request to open a file survives the window it was made in.
- *
- * Reopening locally replaces the window, so the extension host making the offer is not the
- * one that can act on it. `globalState` is the only thing both see: the devShell window has
- * no local workspace, so there is no workspace state to write to, and the window that comes
- * back is a different one either way.
+ * A file to open after reopening locally. In `globalState`, because the local window that
+ * acts on it is a different window from the one that asked.
  */
 const PENDING_KEY = "nixDevShell.openAfterReopen";
 
-/**
- * How long a pending request stays worth acting on.
- *
- * It is consumed by the next local activation, which normally follows within seconds. If
- * the reopen never happened -- the command failed, the user closed the window -- the
- * request must not surface weeks later in an unrelated window, so it expires.
- */
+/** A pending request expires, so a reopen that never happened cannot surface later. */
 const PENDING_TTL_MS = 5 * 60_000;
 
 interface PendingOpen {
@@ -34,16 +24,8 @@ interface PendingOpen {
 }
 
 /**
- * Offer the way out of a devShell window whose flake does not evaluate.
- *
- * The window cannot open: there is no server, because there is no shell to start one in.
- * What the user needs is the file that does not evaluate, and the only editor that can show
- * it is a local one -- a devShell window's files are served by the server that failed to
- * start. So the offer is a single action that does both, and the file it opens is the one
- * Nix pointed at rather than `flake.nix` by default.
- *
- * Fire-and-forget by design: the resolve this belongs to must reject now, so VS Code shows
- * its own failure UI, while this waits on the user.
+ * When the flake does not evaluate, offer to reopen locally at the position Nix
+ * reported. Not awaited by the resolve, which must reject immediately.
  */
 export async function offerLocalRecovery(
   context: vscode.ExtensionContext,
@@ -94,11 +76,8 @@ export async function reopenFolderLocally(folder: vscode.Uri): Promise<void> {
 }
 
 /**
- * Show the file a previous window asked for, if this is the window it asked for it in.
- *
- * Returns whether anything was opened, which is also the answer to whether this activation
- * is the tail of a failed devShell open -- the caller uses it to stay quiet about picking a
- * devShell, since the user is here to fix the flake, not to choose a shell again.
+ * Open the file a previous window asked for, if this is the window it was meant for.
+ * Returns whether one was opened, so the caller can skip the picker offer.
  */
 export async function openPendingFile(
   context: vscode.ExtensionContext,
@@ -146,15 +125,7 @@ export async function openPendingFile(
 }
 
 /**
- * The file in the user's checkout to put the cursor in.
- *
- * Walked innermost-first, because that is the frame that actually failed, and the outer
- * frames are usually only `while evaluating the attribute 'devShells'`. Positions that do
- * not land in the checkout are skipped rather than opened: an error inside nixpkgs is real,
- * but its file is a read-only store path that the user cannot fix and did not write.
- *
- * `flake.nix` itself is the fallback, so the offer still has somewhere to go when Nix named
- * no position at all -- a missing attribute, or a flake it never managed to read.
+ * The innermost error position that lies in the user's checkout, else `flake.nix`.
  */
 export async function errorSite(
   locations: NixErrorLocation[],
@@ -173,16 +144,9 @@ export async function errorSite(
 /**
  * Map a path Nix printed onto the checkout, or `undefined` if it is not part of it.
  *
- * Nix evaluates the *store copy* of a flake in a Git work tree, so the path it reports is
- * usually `/nix/store/<hash>-source/flake.nix` rather than the file the user has open. The
- * copy keeps the layout, so the part after the store path's own directory is the path
- * within the flake -- which is what makes it recoverable at all.
- *
- * What the store copy is rooted at is the *repository*, though, not necessarily the flake:
- * `nixDevShell.flakeDirectory` pointing at a subdirectory makes Nix copy the work tree and
- * address the flake within it, so the reported path carries that subdirectory twice over.
- * Hence the leading components are dropped one at a time until something matches -- and
- * nothing is returned unless the file it names really is in the checkout.
+ * Nix usually reports the store copy (`/nix/store/<hash>-source/...`), rooted at the
+ * repository rather than the flake, so leading components are dropped until the rest
+ * names an existing file in the checkout.
  */
 async function inCheckout(
   file: string,

@@ -1,52 +1,25 @@
 import * as vscode from "vscode";
 
 /**
- * How much output a terminal that has not been rendered yet keeps.
- *
- * VS Code does not attach a renderer -- and so does not start delivering `onDidWrite` --
- * until the terminal is first shown, and `showBuildOutput: onFailure` means that may never
- * happen until the build has already failed. Everything written before then is held so it
- * can be replayed into an empty terminal. A cold `nix develop` on a large flake writes tens
- * of megabytes, which is not worth holding in the extension host for output nobody may ever
- * look at, so the backlog is a tail: the beginning is dropped, because the end is where the
- * error is.
+ * Output kept for replay until VS Code first renders the terminal (which it only does
+ * once shown). A tail, since the end is where the error is.
  */
 const BACKLOG_LIMIT = 512 * 1024;
 
 /**
- * A terminal is a hardware teletype as far as the process on the other end is concerned:
- * a bare newline moves down a row and leaves the cursor where it was. A pty converts for
- * its child, so output that came through one already ends its lines correctly and this
- * changes nothing; output from a plain pipe carries Unix line endings and would otherwise
- * stair-step across the terminal. A lone `\r` is left alone either way -- that is how the
- * progress bar redraws its line.
+ * Convert bare `\n` to `\r\n`, so pipe output does not stair-step. A lone `\r` is kept for
+ * progress bar redraws.
  */
 export function toCrlf(text: string): string {
   return text.replace(/\r?\n/g, "\r\n");
 }
 
 /**
- * The terminal that shows what `nix develop` is doing.
+ * The terminal that shows what `nix develop` is doing: Nix's output only, unmodified.
  *
- * Building a devShell is the slow, opaque part of opening a window: it downloads, it
- * compiles, and when a flake does not evaluate it fails with a message that says where.
- * None of that reached the user before -- the resolver ran Nix with its output piped into a
- * one-line progress notification, and a failure arrived as a single collapsed sentence.
- *
- * This is a `Pseudoterminal`, not an `OutputChannel`, because it interprets ANSI and an
- * output channel does not: escape codes would be printed literally there, and a carriage
- * return would not return anything. Nix writes both -- its progress bar is nothing but --
- * once it is given a terminal to write to, which `loadPty` is what arranges. This end of
- * the arrangement only renders; it is an event emitter VS Code draws, with no pty of its
- * own, which is why `dimensions` exists to tell the other end how wide it is.
- *
- * Nothing else is written into it. The extension has a log channel and a progress
- * notification for what it has to say; this terminal is Nix's output and nothing but, so
- * what is on screen is what the same command would have printed in a shell.
- *
- * Nothing here is interactive either. Closing the terminal does not cancel the build -- the
- * server start does its own `nix develop`, so a cancelled capture would be rebuilt seconds
- * later -- it only stops the output going anywhere.
+ * A `Pseudoterminal` rather than an `OutputChannel`, because it renders ANSI escapes and
+ * carriage returns. It has no pty itself; `dimensions` tells the process on the other
+ * end how wide it is. Closing it does not cancel the build.
  */
 export class BuildTerminal implements vscode.Disposable {
   private readonly writer = new vscode.EventEmitter<string>();
@@ -56,13 +29,7 @@ export class BuildTerminal implements vscode.Disposable {
   private live = false;
   private closed = false;
 
-  /**
-   * How wide the terminal is, once anything has rendered it.
-   *
-   * Nix lays its progress bar out for the width it is told about when it starts, so the
-   * process writing here wants the real one rather than a guess. `undefined` until VS Code
-   * renders the terminal, which with `showBuildOutput: onFailure` may be never.
-   */
+  /** The rendered size, for laying out Nix's progress bar; `undefined` until first shown. */
   private size: { columns: number; rows: number } | undefined;
 
   constructor(name: string) {

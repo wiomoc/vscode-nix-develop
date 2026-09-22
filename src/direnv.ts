@@ -2,15 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { exists } from "./utils/fs-stat";
 
-/**
- * direnv co-existence.
- *
- * A devShell window gets its environment from the server running inside `nix develop`, so
- * direnv and this extension no longer contend for the terminal. What still matters is
- * *which* devShell each one picked: a plain terminal outside the window follows `.envrc`,
- * so a shell it names is the project's own statement of which one it means, and the picker
- * offers that one first. It is the only such statement left -- there is no setting.
- */
+/** What `.envrc` says; a devShell it names is offered first in the picker. */
 export interface DirenvState {
   /** An `.envrc` exists in the flake directory. */
   present: boolean;
@@ -23,11 +15,8 @@ export interface DirenvState {
 }
 // Todo ensure direnv extension is disabled in remote workspace
 /**
- * `use flake`, `use flake .#ci`, `use flake "path:.#ci"`, `use nix`.
- *
- * The rest of the line is captured whole: `#` cannot be excluded here because it is what
- * separates the flake reference from the attribute. Trailing shell comments are stripped
- * afterwards, where `#` is only a comment when whitespace precedes it.
+ * `use flake`, `use flake .#ci`, `use flake "path:.#ci"`, `use nix`. The rest of the line
+ * is captured whole, since `#` also separates the attribute; comments are stripped later.
  */
 const USE_FLAKE = /^[ \t]*use[ \t]+(?:flake|nix)\b([^\n]*)/m;
 const TRAILING_COMMENT = /\s+#.*$/;
@@ -54,11 +43,7 @@ export async function detectDirenv(dir: string): Promise<DirenvState> {
     }
   }
 
-  /**
- * direnv records approval outside the project, so a `.envrc` alone does not mean its hook
- * runs. `.direnv/` is the practical signal that it has loaded here at least once; a stale
- * cache without an `.envrc` is ignored by the caller, since `present` is false there.
- */
+  // Approval is recorded outside the project; `.direnv/` shows it has loaded here.
   const allowed = await exists(path.join(dir, ".direnv"))
 
   return { present: true, usesFlake, allowed, devShell };

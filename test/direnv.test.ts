@@ -21,7 +21,7 @@ describe("direnv co-existence", () => {
   });
 
   it("a stale .direnv without .envrc is not treated as active", async () => {
-    // HyRAIL had exactly this: a leftover cache from an .envrc that no longer exists.
+    // A leftover cache from an .envrc that no longer exists.
     const dir = await withEnvrc(null, [".direnv"]);
     const s = await detectDirenv(dir);
     expect(s.present, "a cache directory alone does not mean direnv runs here").toEqual(false);
@@ -70,9 +70,8 @@ describe("direnv co-existence", () => {
   });
 
   it("a devShell name is what the picker offers as its default", async () => {
-    // There is no setting to compare against any more, so a conflict is not a thing that
-    // can be detected. What the name is now for is seeding the picker, which only needs
-    // it extracted -- covered above -- and absent when .envrc names none.
+    // The name only seeds the picker, which needs it extracted -- covered above -- and
+    // absent when .envrc names none.
     const named = await withEnvrc("use flake .#ci\n");
     const unnamed = await withEnvrc("use flake\n");
     expect((await detectDirenv(named)).devShell).toEqual("ci");

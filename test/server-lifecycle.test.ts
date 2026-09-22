@@ -23,14 +23,8 @@ const cfg: NixDevShellConfig = {
 };
 
 /**
- * What happens to a lock -- and to the devShell's GC root -- when the server behind them
- * is gone.
- *
- * Servers now retire themselves once idle, so nothing local runs at the moment one exits.
- * The next window is what notices, and these cover that handover without needing a real
- * server: a hand-written lock and a hand-built profile are all the state involved. The
- * profile is the project's, not the server's, so the point of most of these is that it is
- * still there afterwards.
+ * What happens to a lock and the devShell's GC root once their server is gone, using a
+ * hand-written lock and profile. The profile must survive.
  */
 
 const storage = await fs.mkdtemp(path.join(os.tmpdir(), "nd-lifecycle-"));
@@ -131,9 +125,7 @@ describe("server lock release", () => {
   });
 
   it("a sweep drops every lock whose server is gone, and keeps the rest", async () => {
-    // Nothing runs inside the devShell when a server retires itself, so the extension is
-    // what clears up afterwards -- at activation, across every devShell at once. Its own
-    // storage, because a sweep is the one operation that reads *all* of them.
+    // Own storage, since a sweep reads every lock.
     const swept = await fs.mkdtemp(path.join(os.tmpdir(), "nd-sweep-"));
     const sweeper = new ServerManager({ fsPath: swept } as never, cfg);
     const lockIn = (key: string) => path.join(swept, "server", "instances", `${key}.json`);

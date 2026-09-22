@@ -15,23 +15,14 @@ export interface RemoteTarget {
 }
 
 /**
- * Separates the fields inside the encoded payload; cannot occur in a path or attr name.
- *
- * Spelled as an escape, not the character itself: a literal NUL byte makes `file`, `grep`
- * and `git grep` classify the whole source file as binary and skip it, silently.
+ * Separates the payload's fields; cannot occur in a path or attr name. An escape, since a
+ * literal NUL makes `grep` treat this file as binary.
  */
 const SEP = "\u0000";
 
 /**
- * A remote authority is `nix-devshell+<base32 payload>`, and the payload *is* the target.
- *
- * The resolver runs in a different window from the one that created the authority and is
- * handed nothing but this string.
- *
- * A URI authority is case-insensitive by RFC 3986.
- *
- * The folder path is already visible in the URI's path component, so encoding it here
- * exposes nothing new.
+ * `nix-devshell+<base32 payload>`, where the payload is the whole target: the resolver
+ * gets nothing but this string. Base32, because authorities are case-insensitive.
  */
 export function authorityFor(target: RemoteTarget): string {
   const parts = [target.folder, target.devShell];
@@ -47,12 +38,8 @@ export function authorityId(authority: string): string {
 }
 
 /**
- * Recover the target an authority describes.
- *
- * Returns undefined rather than throwing for anything that is not one of ours: base64
- * decoding never fails loudly -- it happily turns nonsense into nonsense -- so the result
- * is validated rather than trusted. An authority minted by an older version used an opaque
- * digest and will simply not decode, which the caller reports as needing a fresh reopen.
+ * Recover the target an authority describes, or `undefined` for anything that does not
+ * decode and validate (including older opaque-digest authorities).
  */
 export function decodeAuthority(authority: string): RemoteTarget | undefined {
   const payload = authorityId(authority).toLowerCase();
@@ -78,12 +65,8 @@ export function decodeAuthority(authority: string): RemoteTarget | undefined {
 }
 
 /**
- * A short, stable key for anything stored per authority: server data, the extension
- * directory, the lock file.
- *
- * The authority itself is unsuitable as a file name -- it grows with the folder path and a
- * deep enough checkout would exceed the 255-byte limit on a path component -- so it is
- * hashed down to something fixed-width.
+ * A fixed-width key for per-authority storage (server data, extensions, lock). The
+ * authority itself can exceed the 255-byte file name limit.
  */
 export function storageKeyFor(authority: string): string {
   return crypto

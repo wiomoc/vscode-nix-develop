@@ -6,13 +6,7 @@ import { DevShellSession, FLAKE_DEBOUNCE_MS } from "../src/session";
 import { StatusBar } from "../src/ui";
 import { afterAll, describe, expect, it } from "vitest";
 
-/**
- * The flake watcher, driven through the fake editor.
- *
- * A file watcher is invisible when it is wrong: it fires into a handler that quietly
- * decides the event was not for it, and nothing anywhere says so. Firing the events by
- * hand is the only way to see whether the handler actually runs.
- */
+/** The flake watcher, with events fired by hand through the fake editor. */
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "nd-watch-"));
 const flake = path.join(root, "flake.nix");

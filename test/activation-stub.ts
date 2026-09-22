@@ -1,10 +1,4 @@
-/**
- * A `vscode` stand-in complete enough to run `activate()` end to end.
- *
- * An activation crash takes the whole extension out, and a typecheck cannot catch one --
- * a reference to a variable that a mid-edit build left undeclared type-checks fine in the
- * source it was never built from. Actually executing the bundle does catch it.
- */
+/** A `vscode` stand-in complete enough to run `activate()` end to end. */
 export class CancellationError extends Error {}
 
 export const recorded = {
@@ -23,10 +17,7 @@ export const recorded = {
   warningMessages: [] as { message: string; items: string[] }[],
 };
 
-/**
- * What the user "clicks". A modal the real editor shows returns `undefined` unless a test
- * says otherwise, which is what keeps every other test's activation from taking an action.
- */
+/** What the user "clicks"; `undefined` (dismissed) unless a test says otherwise. */
 export const answers = {
   errorMessage: undefined as
     | ((message: string, items: string[]) => string | undefined)
@@ -66,11 +57,8 @@ interface FakePty {
 }
 
 /**
- * A terminal that does not render, so a test can decide when it starts to.
- *
- * `BuildTerminal` holds its output until VS Code attaches a renderer, and the order there
- * is what makes the replay work: the real editor subscribes to `onDidWrite` and only then
- * calls `open()`. `attach()` reproduces exactly that.
+ * A terminal that renders only when a test calls `attach()`, which subscribes to
+ * `onDidWrite` and then calls `open()`, in the real editor's order.
  */
 export class FakeTerminal {
   output: string[] = [];
@@ -135,12 +123,7 @@ class StatusBarItem {
   dispose(): void {}
 }
 
-/**
- * A watcher a test can fire events at.
- *
- * The no-op it used to be meant `watchFlake` was never executed by anything, which is how
- * a watcher that reacted to nothing stayed that way.
- */
+/** A watcher a test can fire events at. */
 export class FileSystemWatcher {
   readonly changed = new EventEmitter<{ fsPath: string }>();
   readonly created = new EventEmitter<{ fsPath: string }>();
@@ -263,9 +246,7 @@ export const window = {
     recorded.warningMessages.push({ message, items });
     return answers.warningMessage?.(message, items);
   },
-  // The real signature is `(message, options?, ...items)`, so a `MessageOptions` may sit
-  // between the message and the buttons. Splitting it off here keeps `items` the list of
-  // actions the user is actually offered, whichever overload the caller reached for.
+  // `(message, options?, ...items)`: split off a `MessageOptions` so `items` are the buttons.
   showErrorMessage: async (
     message: string,
     ...rest: (string | { modal?: boolean })[]

@@ -2,14 +2,8 @@ import { spawn } from "node:child_process";
 import * as path from "node:path";
 
 /**
- * Run a command to completion, inside the devShell.
- *
- * `utils/run-subprocess` cannot be used here: it reaches for `vscode` for cancellation
- * tokens and for the editor's `node-pty`, neither of which exists in the process this
- * bundle runs in. What is left once those go is small enough to state plainly.
- *
- * Output is kept only as a tail, and only to put something in the error message. Anything
- * worth watching is already on the stream the extension host is rendering.
+ * Run a command to completion inside the devShell. `utils/run-subprocess` needs `vscode`,
+ * which is not available here. Only an output tail is kept, for the error message.
  */
 export function run(
   exe: string,

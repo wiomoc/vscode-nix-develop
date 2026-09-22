@@ -49,12 +49,7 @@ const exists = (p: string): Promise<boolean> =>
 
 const commit = process.env.NIX_DEVSHELL_COMMIT ?? "";
 
-/**
- * The second bundle, which `ServerManager.start` runs inside the devShell as the
- * `--command` of its one `nix develop`. It is built by `npm run build`, so these tests
- * need that to have happened -- asserted once here so a missing bundle reads as "build
- * first" rather than as a server that mysteriously never came up.
- */
+/** `dist/provision.js`, from `npm run build`; checked up front so a missing build is obvious. */
 const provisionScript = path.join(import.meta.dirname, "..", "dist", "provision.js");
 
 beforeAll(async () => {
@@ -65,15 +60,9 @@ beforeAll(async () => {
 });
 
 /**
- * Drives the real VS Code server lifecycle: start it inside `nix develop`, confirm the
- * devShell environment actually reached the server process, reuse it, then stop it.
- *
- * Needs a VS Code server: set NIX_DEVSHELL_SERVER_DIR to an already extracted distribution
- * (the directory containing `bin/code-server`) to skip the ~70MB download; otherwise the
- * test downloads one for NIX_DEVSHELL_COMMIT.
- *
- * These run in the order they are written and share one server: each is a question about
- * the state the one before it left behind, which is why this project is not parallelised.
+ * Drives the real server lifecycle: start inside `nix develop`, check the environment
+ * reached it, reuse it, stop it. NIX_DEVSHELL_SERVER_DIR (containing `bin/code-server`)
+ * skips the download for NIX_DEVSHELL_COMMIT. Tests run in order and share one server.
  */
 describe.skipIf(commit === "")("server (end-to-end)", { tags: ["e2e"] }, () => {
   const key = "testkey";
@@ -182,12 +171,8 @@ describe.skipIf(commit === "")("server (end-to-end)", { tags: ["e2e"] }, () => {
   });
 
   it("patches a node that another server is already running", async (ctx) => {
-    // Servers outlive their window and several devShells share one distribution, so there
-    // is usually a `node` from this very file running when a resolve wants to patch it.
-    // Linux refuses to write to a running executable -- patchelf fails with "open: Text
-    // file busy" -- which is why the patch goes through a rename rather than in place.
-    // A throwaway copy of the distribution keeps this off the one the user's own windows
-    // are running on.
+    // Patching must work while the binary is running (`Text file busy`). Uses a throwaway
+    // copy of the distribution.
     const patchelf = await exec("patchelf", ["--version"], { cwd: work, timeoutMs: 30_000 })
       .then(() => true)
       .catch(() => false);
@@ -231,11 +216,7 @@ describe.skipIf(commit === "")("server (end-to-end)", { tags: ["e2e"] }, () => {
     }
   });
 
-  // `patchServerLd` off used to be `ServerManager`'s to honour, and this asserted it by
-  // calling the manager with the setting off. The check now lives in `resolver.ts`, which
-  // decides whether to call `patchServerNode` at all -- the function itself has no opinion
-  // about the setting, so there is nothing left here to ask. Rewriting it means driving a
-  // resolve, which is why it is marked rather than quietly weakened.
+  // `patchServerLd` is honoured in `resolver.ts`; testing it needs a full resolve.
   it.todo("patchServerLd turned off touches neither the binary nor the environment");
 
   it("nothing is running before we start", async () => {
@@ -282,14 +263,8 @@ describe.skipIf(commit === "")("server (end-to-end)", { tags: ["e2e"] }, () => {
   });
 
   it("the server is not told it is running on an unsupported OS", async () => {
-    // The server reports isUnsupportedGlibc whenever VSCODE_SERVER_CUSTOM_GLIBC_LINKER is
-    // in its environment, and the client turns that into "You are connected to an OS
-    // version that is unsupported by Visual Studio Code". Patching node ourselves is what
-    // keeps the variable out of the environment; this is the assertion that says so.
-    //
-    // The extension patching `node` itself, rather than letting `bin/code-server` do it
-    // from these variables, is the whole reason they are absent. Anyone handing the
-    // launcher the hooks again should expect this test to fail, not to be loosened.
+    // VSCODE_SERVER_CUSTOM_GLIBC_LINKER in the server's environment triggers the
+    // "unsupported OS" warning; see `patchServerNode`.
     const pids = await serverPids(storage);
     expect(pids.length > 0, "no server process found").toBe(true);
     for (const pid of pids) {
@@ -326,10 +301,7 @@ describe.skipIf(commit === "")("server (end-to-end)", { tags: ["e2e"] }, () => {
     expect(await manager.stop(key)).toBe(true);
     expect(await manager.findRunning(key, commit)).toBeUndefined();
 
-    // `nix develop` forks the server and exits, so the pid we spawned is already dead.
-    // Killing only that pid would leave the server listening for good -- which is what
-    // this asserts. The port must be closed immediately; the processes are allowed a
-    // grace period to finish shutting down, but must not survive it.
+    // The port must close immediately; processes get a grace period to exit.
     expect(await isPortOpen(port), "the server is still accepting connections").toBe(false);
 
     const deadline = Date.now() + 15_000;
@@ -353,20 +325,12 @@ describe.skipIf(commit === "")("server (end-to-end)", { tags: ["e2e"] }, () => {
 });
 
 /**
- * The same lifecycle, for an editor that is not Microsoft's build.
- *
- * Everything that differs is read off the editor rather than written down here: the commit,
- * the download URL, the tarball's shape and the launcher's name. `NIX_DEVSHELL_APP_ROOT` is
- * an installed editor's `resources/app` -- VSCodium's, in the `ci` devShell -- so this is
- * the server suite CI runs, needing no commit from anywhere.
- *
- * Skipped for a build that declares no server of its own: that is Microsoft's, which the
- * suite above already covers.
+ * The same lifecycle for the editor at `NIX_DEVSHELL_APP_ROOT` (VSCodium in CI), with
+ * everything read from its `product.json`. Skipped for Microsoft's build.
  */
 const appRoot = process.env.NIX_DEVSHELL_APP_ROOT ?? "";
-// Read here rather than in a hook, because `skipIf` is answered before any hook runs. A
-// skipped suite is still *collected*, though -- the body below runs either way -- so it
-// reaches the editor only from inside a test, and through these defaults elsewhere.
+// Read here, not in a hook, because `skipIf` is evaluated first. A skipped suite's body
+// still runs, hence the defaults below.
 const editor = appRoot !== "" ? await readProduct(appRoot) : undefined;
 const productCommit = editor?.commit ?? "";
 
@@ -374,9 +338,8 @@ describe.skipIf(!editor?.serverDownloadUrlTemplate || productCommit === "")(
   "server, product-declared (end-to-end)",
   { tags: ["e2e"] },
   () => {
-    // No `serverDownloadUrl`: an override would defeat the point, which is that the editor
-    // is asked. `clientProduct()` reads the appRoot the editor reports, so that is what has
-    // to be pointed at the installation -- and it memoises, hence the forget on both sides.
+    // No `serverDownloadUrl` override: the editor's product decides. `clientProduct()`
+    // memoises, hence the forget on both sides.
     const productCfg: NixDevShellConfig = {
       ...cfg,
       remote: { ...cfg.remote, serverDownloadUrl: "" },
@@ -423,17 +386,13 @@ describe.skipIf(!editor?.serverDownloadUrlTemplate || productCommit === "")(
 
     it("acquires one, and finds the launcher the product names", async () => {
       launcher = await manager.ensureServer(productCommit);
-      // The launcher's name is the product's, and the tarball it came out of has no wrapper
-      // directory -- both read from the distribution rather than assumed, which is the whole
-      // reason a build that is not Microsoft's works at all.
+      // Launcher name and tarball layout both come from the distribution.
       expect(path.basename(launcher)).toEqual(editor!.serverApplicationName);
       await fs.access(launcher);
     });
 
     it.skipIf(linuxOnly)("patches its node the same way as Microsoft's", async () => {
-      // Nothing about the patch is product-specific -- it is a `node` in a distribution
-      // either way -- but this is what says the layout assumption holds for a build whose
-      // tarball is laid out differently.
+      // Checks the patch's layout assumption for a differently laid-out tarball.
       const { linker, rpath } = await patchServerNode(productCfg, launcher, work);
       expect(linker, `expected a store path, got ${linker}`).toMatch(/^\/nix\/store\//);
       expect(
@@ -484,11 +443,8 @@ describe.skipIf(!editor?.serverDownloadUrlTemplate || productCommit === "")(
 );
 
 /**
- * Processes that are actually a VS Code server.
- *
- * `/proc/<pid>/cmdline` is NUL-separated, so it has to be split into real arguments before
- * matching: a substring search over the whole blob also matches any shell whose command
- * line happens to mention the path, including the one running this test.
+ * VS Code server processes, matched on split `/proc/<pid>/cmdline` arguments so shells
+ * merely mentioning the path do not match.
  */
 async function serverPids(marker?: string): Promise<number[]> {
   const out: number[] = [];
@@ -532,16 +488,8 @@ async function cmdlineOf(pid: number): Promise<string> {
   }
 }
 /**
- * The guarantee the whole idle-shutdown design exists for: a devShell nobody is using stops
- * costing a Node process, without anyone asking it to.
- *
- * It gets its own server rather than joining the suite above, because proving it means
- * letting that server die -- which would strand every test after it. Nothing of the
- * extension is alive while the wait happens, which is the point: the lock outlives the
- * server it names, and stays until something on this side looks at it again.
- *
- * Opt-in, because the server's grace period is a fixed five minutes and no flag shortens it
- * without also making a window reload tear the server down.
+ * An unused server exits on its own. Uses its own server, and is opt-in because the
+ * grace period is a fixed five minutes.
  */
 describe.skipIf(commit === "" || process.env.NIX_DEVSHELL_E2E_IDLE !== "1")(
   "idle shutdown (end-to-end)",
@@ -608,9 +556,7 @@ describe.skipIf(commit === "" || process.env.NIX_DEVSHELL_E2E_IDLE !== "1")(
   });
 
   it("the lock outlives the server, and a sweep is what clears it", async () => {
-    // Nothing of ours runs inside the devShell, so an exiting server cannot tidy up after
-    // itself. The lock it leaves is inert -- it names a port nothing answers on -- and
-    // the next sweep, which the extension runs at activation, is what removes it.
+    // The lock stays until the next sweep at activation.
     expect(await exists(lock), "a retired server leaves its lock behind").toBe(true);
     expect(await manager.sweep(), "the sweep should release exactly this lock").toEqual(1);
     expect(await exists(lock), "and the lock should be gone afterwards").toBe(false);

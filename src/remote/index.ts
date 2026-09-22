@@ -30,10 +30,8 @@ export function inDevShellWindow(): boolean {
 }
 
 /**
- * Reopen a folder in a window whose extension host runs inside the devShell.
- *
- * The heavy lifting happens later, in the resolver: this only encodes the target into an
- * authority and asks VS Code to open the folder against it.
+ * Reopen a folder in a devShell window. This only encodes the authority; the resolver
+ * does the work.
  */
 export async function reopenInDevShell(
   folder: vscode.WorkspaceFolder,
@@ -50,13 +48,9 @@ export async function reopenInDevShell(
     void vscode.window.showWarningMessage("Select a devShell first.");
     return;
   }
-  // Opening the window is the only thing a devShell choice does, and it needs a proposed
-  // API that stock VS Code grants only at launch. Checked here, at the single funnel for
-  // opening one, rather than warning every window that merely has a flake.nix.
+  // Needs the proposed resolver API; checked here rather than in every flake window.
   if (!isResolverAvailable()) {
-    // argv.json rather than the --enable-proposed-api flag: the flag only holds for the
-    // one launch, and a window opened from the dock or a recent-folders entry would lose
-    // it again. "Configure Runtime Arguments" opens that file.
+    // argv.json, since `--enable-proposed-api` only lasts one launch.
     const choice = await vscode.window.showWarningMessage(
       "Nix DevShell needs the `resolvers` proposed API to open a devShell window. " +
         `Add "enable-proposed-api": ["${EXTENSION_ID}"] to argv.json, ` +
@@ -101,12 +95,8 @@ export async function reopenLocally(): Promise<void> {
 }
 
 /**
- * Stop the server backing a devShell, so the next open starts a fresh one.
- *
- * Inside a devShell window the target is obvious: this window's own server. From a local
- * window there is nothing that records which shells have servers running, so it has to be
- * asked -- a server outlives the window that started it, which is exactly why this command
- * exists.
+ * Stop the server backing a devShell, so the next open starts a fresh one: this window's
+ * own, or one picked from a local window.
  */
 export async function killServer(
   context: vscode.ExtensionContext,
@@ -151,11 +141,7 @@ export async function killServer(
     return;
   }
 
-  // Stopping this window's own server leaves the window with nothing behind it: the
-  // extension host, the file system serving the checkout and every terminal *were* that
-  // server. So the command finishes the job and puts the folder back in a local window,
-  // rather than leaving a window that can no longer read the files it is showing. This
-  // extension runs on the UI side, which is why it is still here to do it.
+  // This window ran on that server, so put the folder back in a local window.
   if (ownServer && folder) {
     log.info(
       "stopped this window's devShell server; reopening the folder locally",
@@ -176,16 +162,8 @@ export async function killServer(
 }
 
 /**
- * Clear out locks whose servers are gone.
- *
- * A devShell server outlives the window that started it and retires itself once it has
- * been idle, which means the moment it exits there is nothing of ours running to tidy up
- * after it -- the script that started it inside the devShell exited the moment it was up.
- * The extension is the one that notices, so it does the tidying, at the point a stale lock
- * is most likely to be sitting there: the next time an editor starts.
- *
- * Nothing waits on this. A lock that outlives its server is inert -- every reader tests the
- * port before trusting it -- so sweeping is housekeeping, not a precondition for anything.
+ * Clear out locks left by servers that retired while nothing of ours was running.
+ * Housekeeping only: every reader checks the port anyway.
  */
 export async function sweepServerLocks(
   context: vscode.ExtensionContext,
@@ -201,13 +179,8 @@ export async function sweepServerLocks(
 }
 
 /**
- * Switch devShells from inside a devShell window.
- *
- * Such a window has no local workspace folder -- its folders are `vscode-remote://` URIs --
- * so the usual per-folder session does not exist here. The authority registry is the only
- * record of which local flake this window came from, which is exactly what makes switching
- * possible without dropping back to a local window first. The new choice lives in the new
- * window's authority as well; nothing is written to the workspace.
+ * Switch devShells from inside a devShell window, using the flake recorded in its
+ * authority.
  */
 export async function switchDevShellInRemoteWindow(
   context: vscode.ExtensionContext,
@@ -252,10 +225,8 @@ export async function switchDevShellInRemoteWindow(
     devShell: picked.value,
   });
 
-  // This window is the only thing using the server it is about to leave, and that server's
-  // extension host still has the previous devShell's extensions activated. Shutting it down
-  // releases it and guarantees the next visit to this devShell starts from the extension set
-  // the flake currently declares, rather than whatever was loaded before.
+  // Stop the server being left, so the next visit starts with the flake's current
+  // extension set.
   const servers = new ServerManager(context.globalStorageUri, cfg);
   if (await servers.stop(storageKeyFor(authority))) {
     log.info(`stopped the server for devShell ${target.devShell}`);
@@ -275,13 +246,8 @@ export async function switchDevShellInRemoteWindow(
 }
 
 /**
- * A devShell window loads `workspace`-kind extensions from the server's extension
- * directory, which starts out empty. Without the ones the user already has, language
- * servers and linters are simply absent -- which looks exactly like the devShell
- * environment having failed to apply, even though the toolchain is present.
- *
- * VS Code ships the right action for this; offer it once per devShell rather than
- * silently installing forty extensions.
+ * A devShell's server starts with no extensions, so offer VS Code's own "install local
+ * extensions" action, once per devShell.
  */
 export async function offerExtensionSync(
   context: vscode.ExtensionContext,

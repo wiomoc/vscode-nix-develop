@@ -9,12 +9,8 @@ interface ShellItem extends vscode.QuickPickItem {
 }
 
 /**
- * Present the devShells found in the flake. `default` is floated to the top because it is
- * what a bare `nix develop` would pick.
- *
- * `current` is the shell to mark and to seed the installable box with, when the caller
- * knows of one: the window's own shell when switching from inside a devShell, or the one
- * `.envrc` names. There is no stored selection to fall back on, so it is often absent.
+ * Present the devShells found in the flake, `default` first. `current`, if known, is
+ * marked and seeds the installable box.
  */
 export async function pickDevShell(
   shells: DevShell[],
@@ -170,9 +166,7 @@ export function registerResourceLabelFormatter(
 
     registerFormatter(`${AUTHORITY_PREFIX}+*`);
 
-    // In a devShell window, name the shell in the title. Registered against the exact
-    // authority so it outranks the wildcard above, which `findFormatting` resolves by
-    // preferring the longest matching authority pattern.
+    // Name the shell in the title; the exact authority outranks the wildcard above.
     const authority = vscode.env.remoteAuthority;
     const target = authority ? decodeAuthority(authority) : undefined;
     if (authority && target) {

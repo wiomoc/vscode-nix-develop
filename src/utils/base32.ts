@@ -1,10 +1,7 @@
 
 /**
- * RFC 4648 base32, lower case, unpadded.
- *
- * Written out rather than reached for because Node has no base32, and the alternatives are
- * either case-sensitive (base64) or half again as long (hex). A single-case alphabet is the
- * whole point: the authority has to mean the same thing after VS Code lower-cases it.
+ * RFC 4648 base32, lower case, unpadded. Single-case, because VS Code lower-cases
+ * authorities.
  */
 const B32 = "abcdefghijklmnopqrstuvwxyz234567";
 

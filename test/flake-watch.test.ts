@@ -7,14 +7,7 @@ import { watchDevShellFlake, restartDevShellWindow } from "../src/remote/flake-w
 import { StatusBar } from "../src/ui";
 import { afterAll, describe, expect, it } from "vitest";
 
-/**
- * The watcher a devShell window runs against the flake it was built from.
- *
- * This one watches a real directory with `fs.watch`, so the test writes real files and
- * waits for real events: the whole point of it is behaviour the editor cannot be asked
- * about, and a hand-fired event would prove nothing about whether the watch is on the
- * right path.
- */
+/** The devShell window's flake watcher, against real files and real `fs.watch` events. */
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "nd-devshell-"));
 const flake = path.join(root, "flake.nix");

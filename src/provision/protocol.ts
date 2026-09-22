@@ -1,23 +1,11 @@
 /**
- * What the extension host and the provisioning script agree on.
- *
- * The two run in different processes -- different *bundles*, even: the host is
- * `dist/extension.js` inside the editor, the script is `dist/provision.js` run by the
- * server's `node` inside `nix develop`. Nothing is shared between them at runtime, so
- * everything that crosses is declared here and nowhere else.
- *
- * Deliberately free of imports. This module is linked into both bundles, and the one that
- * runs inside the devShell must not pull `vscode` in behind it.
+ * The contract between the extension host (`dist/extension.js`) and the provisioning
+ * script (`dist/provision.js`). Import-free: it is linked into both bundles.
  */
 
 /**
- * Everything the script needs, as its single argument.
- *
- * Serialised into argv rather than handed over in a file, because there is nothing here
- * worth a second file: the connection token already travels in this same `nix develop`
- * command line as the server's own `--connection-token`, so nothing is exposed that was
- * not exposed before. The environment would have been the other candidate and is the one
- * thing a devShell is entitled to rewrite from under us.
+ * Everything the script needs, as JSON in its single argument. Not the environment,
+ * which the devShell may rewrite; the token is on the server's command line anyway.
  */
 export interface ProvisionOptions {
   /** The server launcher -- `bin/code-server` and its kin. */
@@ -43,22 +31,13 @@ export interface ProvisionOptions {
 }
 
 /**
- * The record of a running server -- and the script's only answer to the host.
- *
- * The script writes it; `ServerManager` reads it, here and in every later window that
- * comes looking for a server to attach to. There is no second channel and no result file:
- * the script exits zero exactly when this file describes a server that is up, so the exit
- * code says whether to read it and the file says everything else.
+ * The record of a running server, written by the script and read by `ServerManager` in
+ * this and later windows. Valid exactly when the script exits zero.
  */
 export interface LockFile {
   port: number;
   connectionToken: string;
-  /**
-   * The server's own pid -- not the script's.
-   *
-   * The script starts the server detached, so the server leads a session and a process
-   * group of its own, and that group is what `ServerManager.stop` signals.
-   */
+  /** The server's own pid, which leads the process group `ServerManager.stop` signals. */
   pid: number;
   installable: string;
   commit: string;

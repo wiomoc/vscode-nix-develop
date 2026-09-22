@@ -5,25 +5,16 @@ import { log } from "./utils/log";
 import type { NixDevShellConfig } from "./config";
 
 /**
- * What roots a devShell against `nix store gc`.
- *
- * `persistent` writes a Nix profile next to the project, under `.vscode/nix-devshell/`, and
- * leaves it there. `none` passes no `--profile` at all, which leaves the shell's store
- * paths unrooted: on Linux, Nix's GC still scans `/proc` for paths a live process
- * references, so a *running* server is largely covered, but nothing protects the shell
- * between the build finishing and the server appearing, nothing survives the server's
- * exit, and a GC that starts before the server appears does not see it at all.
+ * What roots a devShell against `nix store gc`: `persistent` keeps a profile under
+ * `.vscode/nix-devshell/`; `none` leaves it unrooted, protected only while a process
+ * references it.
  */
 export type ProfileMode = NixDevShellConfig["profile"];
 
 /** Everything this extension writes into a project lives here. */
 const PROFILE_DIR = path.join(".vscode", "nix-devshell");
 
-/**
- * Store paths, one machine's Nix store, rebuilt on demand: nothing here belongs in a
- * repository. `*` covers this file too, so the directory disappears from `git status`
- * entirely rather than leaving the ignore rule itself to be committed.
- */
+/** Ignores everything, this file included, so the directory never shows in `git status`. */
 const GITIGNORE = [
   "# Nix GC roots for the devShells opened by the nix-devshell extension.",
   "# Machine-specific store paths, recreated on demand -- never committed.",
@@ -37,15 +28,8 @@ export function profileRoot(folder: string): string {
 }
 
 /**
- * A directory name for a devShell: its own name where that is already a safe one.
- *
- * A devShell is named by an attribute (`default`, `ci`) but may also arrive as a full
- * installable (`.#ci`, `github:owner/repo#ci`), which is not a usable path component. The
- * readable name is kept whenever it survives unchanged, since the point of putting these
- * next to the project is that a person can see which shell a root belongs to. Anything
- * that had to be rewritten -- or is too long for a path component -- carries a digest of
- * the original, because sanitising alone would map two different devShells onto one
- * directory and so onto one profile.
+ * A directory name for a devShell: its own name when that is safe, otherwise a sanitised
+ * name plus a digest, so different installables never share a profile.
  */
 export function profileDirName(devShell: string): string {
   const safe = devShell
@@ -63,12 +47,8 @@ export function profileDirName(devShell: string): string {
 }
 
 /**
- * The GC root for a devShell, or nothing when the user asked for none.
- *
- * Creating the directory here rather than at the `nix develop` call site is what lets the
- * `.gitignore` be written exactly once, alongside it. A failure is not fatal: a read-only
- * checkout, or a folder the user cannot write to, gives up the root and opens the window
- * anyway -- which is `none`, the mode they could have chosen.
+ * The GC root for a devShell (creating its directory and `.gitignore`), or `undefined`
+ * for `none` or when the folder is not writable.
  */
 export async function ensureProfile(
   cfg: NixDevShellConfig,

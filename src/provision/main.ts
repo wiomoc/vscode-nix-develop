@@ -8,37 +8,20 @@ import { installDeclaredExtensions } from "./extensions";
 import { applyDeclaredSettings } from "./settings";
 
 /**
- * Everything that has to happen *inside* the devShell, in one process.
+ * `dist/provision.js`: everything that happens inside the devShell, run by the server's
+ * `node` as the `--command` of `nix develop`. Reads `vscodeExtensions` and
+ * `vscodeSettings` from `process.env`.
  *
- * This is `dist/provision.js`, a second bundle run by the server's `node` as the
- * `--command` of a single `nix develop`. Before it existed the extension host entered the
- * shell twice: once with a shell script that dumped the environment into a temp file,
- * which the host parsed to find out what the flake declared, and once more to start the
- * server. Two evaluations, two `shellHook` runs, and a whole protocol for shipping an
- * environment across a process boundary -- to reach code that could simply have been
- * running in there.
- *
- * So it runs in there. `vscodeExtensions` and `vscodeSettings` are read from
- * `process.env`, because this process *is* the devShell.
- *
- * It tells the host one thing, in two parts: the lock file, and the exit code. Zero means
- * that file describes a server that is up. Everything else it has to say it says on
- * stderr, which is already on screen in the build terminal.
- *
- * What it must not do is stay. The server outlives the window that started it, and this
- * process holds the far end of the pty the host is painting that terminal with -- so the
- * server is started detached, in a session of its own, and this exits the moment the
- * server is up. Nothing of ours is left between the extension and the server, and the host
- * is free to let the terminal go.
+ * Its answer is the lock file plus the exit code (zero means the server is up); the rest
+ * goes to stderr, which the build terminal shows. It starts the server detached and exits
+ * as soon as it is up.
  */
 async function main(): Promise<void> {
   const raw = process.argv[2];
   if (!raw) throw new Error("no options were given");
   const opts = JSON.parse(raw) as ProvisionOptions;
 
-  // Neither of these is allowed to stop the server starting: a flake that declares an
-  // extension that will not install, or a settings file that cannot be read, costs that
-  // one thing and not the window.
+  // Neither of these may stop the server from starting.
   await installDeclaredExtensions({
     launcher: opts.launcher,
     extensionsDir: opts.extensionsDir,
@@ -59,44 +42,24 @@ async function main(): Promise<void> {
 }
 
 /**
- * Start the server, detached, and wait for it to say which port it is on.
+ * Start the server detached and wait for it to report its port.
  *
- * `detached` is doing real work here, on both ends. It makes the server a session leader,
- * which takes it off this process's controlling terminal -- the pty the extension host
- * lent Nix -- so closing that terminal cannot send it a SIGHUP. And it makes the server's
- * own pid a process group leader, which is the group `ServerManager.stop` signals; before
- * this the recorded pid belonged to `nix develop`, which had exec'd away by then.
+ * `detached` makes the server a session leader, so closing the build terminal's pty
+ * cannot SIGHUP it, and a process group leader, which is what `ServerManager.stop`
+ * signals.
  *
- * Its output comes back over ordinary pipes, and this process reads them only until the
- * server names its port. After that the read ends are dropped and the server goes on
- * writing into a pipe nobody holds. That is survivable for this particular child and not
- * in general: a bare Node process takes an uncaught `EPIPE` and dies, while the VS Code
- * server keeps running -- it was checked under load that makes it log, not assumed. What
- * makes it safe to rely on is that the server is not writing anything here that matters
- * anyway: its real logs go to `<serverDataDir>/data/logs/`, which it opens for itself.
- *
- * This is the arrangement the extension host used to have, minus its two costs. It held
- * those pipes for the whole session with an ever-growing buffer behind them, and the
- * server only ever lost them when the editor quit -- at the point where nothing was left
- * to notice what happened next.
+ * Its pipes are dropped once the port is known. The VS Code server survives writing to a
+ * closed pipe, and its real logs go to `<serverDataDir>/data/logs/` anyway.
  */
 async function startServer(opts: ProvisionOptions): Promise<void> {
   const args = [
     "--start-server",
-    // Servers outlive the window that started them so the next one attaches instantly,
-    // but nothing notices when the *last* window goes away: VS Code never asks a server
-    // to exit, and a devShell window cannot sensibly kill the server it is running on.
-    // The server settles it itself. Five minutes after its last extension host
-    // disconnects it exits; a host that reconnects inside that window cancels it, which
-    // is what keeps reloads and reopens on the running server. The same timer starts at
-    // boot, so a server we start and then fail to connect to is collected too.
+    // Nothing else stops a server once its last window is gone: it exits five minutes
+    // after its last extension host disconnects (or after boot, if none ever connects).
     "--enable-remote-auto-shutdown",
     "--host",
     "127.0.0.1",
-    // The server picks, and says so on the line `LISTENING` matches. Picking one out here
-    // would mean holding a socket open to reserve it and letting go a moment before the
-    // server binds, which is a race with nothing to gain: the server has to be read for
-    // its readiness in any case.
+    // The server picks the port and reports it on the line `LISTENING` matches.
     "--port",
     "0",
     "--connection-token",
@@ -123,9 +86,7 @@ async function startServer(opts: ProvisionOptions): Promise<void> {
 
   const started = await awaitListening(child, opts.connectTimeoutSeconds);
 
-  // Ours to let go of, and it has to be done explicitly: a pipe with a listener on it is a
-  // handle that would keep this process alive, and staying alive is the one thing it must
-  // not do.
+  // Open pipes would keep this process alive.
   child.stdout?.destroy();
   child.stderr?.destroy();
 
@@ -155,18 +116,8 @@ const WINDOW = 8192;
 type Listening = { port: number } | { problem: string };
 
 /**
- * Read the server's output until it names its port, and say what went wrong if it never
- * does.
- *
- * Everything it prints on the way goes straight out on stderr, which is the stream the
- * extension host is painting the build terminal with -- so a server that takes a while, or
- * complains, does it where someone can see. This is the only window in which its output
- * has anywhere to go, which is also why the failure messages carry the tail of it.
- *
- * Only a tail is kept. The line being matched can be split across two chunks, so some
- * overlap has to be held, but the whole of a server's startup output does not: keeping all
- * of it is what used to leave a buffer growing in the extension host for as long as the
- * server lived.
+ * Read the server's output until it names its port, forwarding it to stderr (the build
+ * terminal). Only a tail is kept, for matching across chunks and for error messages.
  */
 function awaitListening(
   child: ChildProcess,

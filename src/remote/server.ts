@@ -16,17 +16,13 @@ import type { LockFile, ProvisionOptions } from "../provision/protocol";
 const INSTALL_TIMEOUT_SECONDS = 300;
 
 /**
- * Where the output of the one `nix develop` goes, and what to lay it out for.
- *
- * Everything the run produces goes here and nowhere else: Nix's build log, and the
- * provisioning script's own lines, which it writes to stderr for exactly this reason.
- * Nothing is parsed back out of it -- the script answers in its lock file and its exit
- * code -- so this is a sink, not a channel.
+ * Where the output of `nix develop` goes: Nix's build log and the provisioning script's
+ * stderr. Display only -- the script answers through its lock file and exit code.
  */
 export interface BuildOutput {
-  /** Nix's bytes verbatim -- escape codes and all -- for something that can render them. */
+  /** Nix's output verbatim, escape codes included. */
   onOutput?: (chunk: string) => void;
-  /** The terminal those bytes are being rendered in, so Nix can be given one of its own. */
+  /** The terminal rendering it, so Nix can be given a pty of matching size. */
   tty?: TtyOptions;
 }
 
@@ -37,11 +33,7 @@ export interface ServerHandle {
   pid: number;
 }
 
-/**
- * VS Code server distributions are per-commit and per-platform. The client refuses to
- * connect to a server built from a different commit, so the commit of the *running*
- * client is the one that matters.
- */
+/** Server distributions are per-commit and per-platform; the client's commit must match. */
 export function serverPlatform(): string {
   const { os, arch } = serverOsArch();
   return `${os}-${arch}`;
@@ -62,12 +54,9 @@ export class ServerManager {
   }
 
   /**
-   * The launcher inside an extracted distribution.
-   *
-   * Its name is the product's -- `code-server`, `codium-server` -- so it is read from the
-   * distribution's own `product.json` where there is one, and from the running editor's
-   * otherwise. The last resort is whatever in `bin/` looks like a launcher, which covers a
-   * rebuild whose `product.json` says nothing useful.
+   * The launcher inside an extracted distribution. Its name is product-specific
+   * (`code-server`, `codium-server`): taken from the distribution's `product.json`, then
+   * the editor's, then any `bin/*-server`.
    */
   private async launcherIn(dir: string): Promise<string | undefined> {
     const names: string[] = [];
@@ -91,15 +80,9 @@ export class ServerManager {
   // ------------------------------------------------------------- acquisition
 
   /**
-   * Ensure a server matching `commit` is on disk, downloading it if necessary.
-   *
-   * The desktop application cannot stand in for one. It is a different build: it ships
-   * `out/main.js` and an Electron binary, with no `out/server-main.js`, no `vs/server`, and
-   * no plain `node` to run them with. That is why `code serve-web` and `code tunnel`
-   * download a server too.
-   *
-   * What can be reused is a server some other feature of the same editor already fetched
-   * for this exact commit, which saves a second ~220 MB copy.
+   * Ensure a server matching `commit` is on disk, downloading it if necessary. The desktop
+   * build cannot serve (no `out/server-main.js`, no plain `node`), but a server another
+   * feature already fetched for this commit is reused.
    */
   async ensureServer(
     commit: string,
@@ -137,10 +120,7 @@ export class ServerManager {
       });
       await fs.rm(tarball, { force: true });
 
-      // Where the distribution actually begins differs by product: Microsoft's tarball
-      // wraps everything in a single `vscode-server-<platform>` directory, VSCodium's has
-      // no wrapper at all. Unpacking flat and then looking for the real root handles both
-      // without having to be told which one this is.
+      // Microsoft's tarball has a wrapper directory, VSCodium's does not.
       const root = await findDistributionRoot(tmp);
       if (!root) {
         throw new Error(
@@ -167,16 +147,10 @@ export class ServerManager {
   }
 
   /**
-   * A server for this commit that something else already downloaded.
-   *
-   * Remote-SSH unpacks into `~/<serverDataFolderName>/bin/<commit>`, and the CLI behind
-   * `code tunnel` uses `<cli data>/servers/<quality>-<commit>/server`, where the quality
-   * prefix varies by build; matching on the commit suffix avoids guessing its spelling and
-   * also skips the `-web` variants, which are built for serving a browser UI rather than a
-   * remote window. Both folder names come from the product, so VSCodium's
-   * `.vscodium-server` and `.vscode-oss` are searched when VSCodium is what is running.
-   *
-   * A miss costs nothing -- the caller downloads -- so this is best effort by design.
+   * A server for this commit that something else already downloaded (best effort):
+   * Remote-SSH's `~/<serverDataFolderName>/bin/<commit>`, or the tunnel CLI's
+   * `<cli data>/servers/<quality>-<commit>/server`. Matching the commit suffix skips the
+   * `-web` variants.
    */
   private async findExistingServer(
     commit: string,
@@ -226,17 +200,8 @@ export class ServerManager {
   /**
    * A previously started server for this key, if it is still reachable.
    *
-   * Liveness is decided by the *port*, not by the recorded pid. A lock outlives reboots,
-   * and a pid from a previous boot is free to belong to something else entirely by the time
-   * it is read back -- a live pid is no evidence that the server is the thing behind it.
-   * The pid is recorded to signal, not to ask.
-   *
-   * This is also the backstop for releasing what a departed server held. The server's own
-   * wrapper does that the moment it exits, so ordinarily there is nothing left to find;
-   * what reaches here is what no wrapper survived to clean up -- a SIGKILL, an OOM kill, a
-   * reboot. The commit is compared only after the port has answered: a lock from a
-   * different commit is still worth releasing when nothing is behind it, and must be left
-   * alone when something is.
+   * Liveness is decided by the port, not the pid: a lock outlives reboots, and a recycled
+   * pid proves nothing. A dead lock is released even when its commit differs.
    */
   async findRunning(
     key: string,
@@ -260,19 +225,11 @@ export class ServerManager {
   }
 
   /**
-   * Give up what a departed server held: its lock.
+   * Remove a departed server's lock. The devShell's GC root stays: a persistent profile is
+   * meant to outlive servers.
    *
-   * The devShell's GC root is not touched. A profile under `.vscode/nix-devshell/` is meant
-   * to outlive the servers that enter it -- that is the whole of
-   * `nixDevShell.profile: persistent` -- so the store paths stay put for the next window,
-   * offline or not, and the directory is the user's to delete.
-   *
-   * Nothing of ours is running at the moment a server exits. The script that started it
-   * left as soon as it was up -- that is what lets the window let go of the build terminal
-   * -- so by the time the server retires there is no wrapper around it to notice. A lock is
-   * therefore cleaned up by whoever next looks at it: `sweep`, `findRunning` or `stop`.
-   * Until then it is a lock naming a port nothing answers on, which every reader already
-   * checks for. All three are idempotent, so the order they arrive in does not matter.
+   * Nothing of ours runs when a server exits, so locks are cleaned up lazily by whoever
+   * reads them next: `sweep`, `findRunning` or `stop`.
    */
   private async release(key: string, lock: LockFile): Promise<void> {
     await fs.rm(this.lockPath(key), { force: true });
@@ -280,17 +237,8 @@ export class ServerManager {
   }
 
   /**
-   * Drop every lock whose server is gone.
-   *
-   * A server that retires itself -- five minutes after its last window closes -- leaves its
-   * lock behind, because nothing of ours is running at that moment to remove it. `stop` and
-   * `findRunning` clear the one lock they are about; this is what clears the rest, and it
-   * runs at activation, when a stale lock is exactly what a just-started editor is likely
-   * to be looking at.
-   *
-   * A closed port is the test, as everywhere else. Reading a malformed or half-written lock
-   * yields nothing and is left alone rather than deleted: an unreadable file here is not
-   * evidence that a server is gone.
+   * Drop every lock whose port is closed; runs at activation. An unreadable lock is left
+   * alone, since it is no evidence that its server is gone.
    */
   async sweep(): Promise<number> {
     const dir = path.join(this.root, "instances");
@@ -318,12 +266,8 @@ export class ServerManager {
   }
 
   /**
-   * Stop the server behind a key.
-   *
-   * The signal goes to the whole process *group* rather than the recorded pid. The pid in
-   * the lock is the server's own, and the server was started detached -- so it leads both a
-   * session and a group of its own, and the group is what catches the extension hosts and
-   * terminals it has forked along the way.
+   * Stop the server behind a key. The server was started detached and leads its own
+   * process group, so signalling the group also reaches its extension hosts and terminals.
    */
   async stop(key: string): Promise<boolean> {
     const lock = await this.readLock(key);
@@ -340,8 +284,7 @@ export class ServerManager {
       }
     }
 
-    // Confirm it actually stopped rather than reporting success optimistically. The socket
-    // closes before the process exits, so both have to be waited on.
+    // The socket closes before the process exits, so wait for both.
     const deadline = Date.now() + 10_000;
     let stopped = await ServerManager.isStopped(lock);
     while (Date.now() < deadline && !stopped) {
@@ -382,19 +325,9 @@ export class ServerManager {
   }
 
   /**
-   * Build the devShell, provision it and start a server in it -- in one `nix develop`.
-   *
-   * One, now, rather than two. The extension used to enter the shell once with a script
-   * that dumped the environment into a temp file, parse that file out here to learn what
-   * the flake declared, provision from out here, and then enter the shell a second time to
-   * start the server. Everything between those two entries is now `dist/provision.js`,
-   * running inside the shell, where `vscodeExtensions` is simply an environment variable
-   * it can read. What is left out here is arranging the call and reading its result.
-   *
-   * The server that comes of it is detached and outlives this -- see `startServer` in that
-   * script. What this waits on is a short-lived `nix develop` that has already exited by
-   * the time it returns, which is why `run` suffices where a hand-rolled detached spawn
-   * used to be needed, and why the build terminal can be disposed the moment it is done.
+   * Build the devShell, provision it and start a server in it, in one `nix develop` that
+   * runs `dist/provision.js`. The server is detached (see `startServer` there), so the
+   * `nix develop` exits as soon as it is up.
    */
   async start(opts: {
     key: string;
@@ -415,9 +348,7 @@ export class ServerManager {
     await fs.mkdir(opts.serverDataDir, { recursive: true });
     await fs.mkdir(path.dirname(this.lockPath(opts.key)), { recursive: true });
 
-    // The server's own `node`, not the devShell's. A devShell need not have one, and if it
-    // does it is the project's rather than the editor's; this one is known to match the
-    // server, and `patchServerNode` has already dealt with whether it can start at all.
+    // The server's own `node`: the devShell may have none, or a different version.
     const node = await serverNodePath(opts.launcher);
 
     const provision: ProvisionOptions = {
@@ -426,9 +357,7 @@ export class ServerManager {
       serverDataDir: opts.serverDataDir,
       flakeDir: opts.flakeDir,
       lockFile: this.lockPath(opts.key),
-      // Minted here because the window needs it whether or not the script gets that far,
-      // and because a resolve that ends in a different token than it handed VS Code has
-      // nothing to connect with.
+      // Minted here: the resolve hands this token to VS Code.
       connectionToken: crypto.randomUUID(),
       commit: opts.commit,
       installable: opts.installable,
@@ -436,12 +365,9 @@ export class ServerManager {
       installTimeoutSeconds: INSTALL_TIMEOUT_SECONDS,
     };
 
-    // A stale lock from a server that has gone would otherwise be read back below as
-    // though this run had written it.
+    // Otherwise a stale lock would be read back below as this run's.
     await fs.rm(provision.lockFile, { force: true });
 
-    // How to enter a devShell belongs to `nix.ts`; what to run once inside it is the only
-    // part this file gets an opinion about.
     const { exe, args } = await developCommand(this.cfg, {
       installable: opts.installable,
       profile: opts.profile,
@@ -449,8 +375,7 @@ export class ServerManager {
       logFormat: opts.output?.onOutput ? BUILD_LOG_FORMAT : undefined,
     });
 
-    // The token is in there -- as it always was, in the server's own `--connection-token`
-    // -- and the log is a document people paste into issues.
+    // Redact the token: logs get pasted into issues.
     log.info(
       `entering the devShell: ${exe} ${args.join(" ")}`.replace(
         provision.connectionToken,
@@ -459,8 +384,7 @@ export class ServerManager {
     );
     opts.progress?.("Building the devShell\u2026");
 
-    // Everything both sides produce goes to the terminal as it arrives, and the
-    // notification gets the same stream a line at a time -- it cannot render one.
+    // The terminal gets the raw stream; the notification gets it line by line.
     let carry = "";
     const toOutput = (chunk: string) => {
       opts.output?.onOutput?.(chunk);
@@ -473,20 +397,17 @@ export class ServerManager {
       }
     };
 
-    // Throws on a non-zero exit, which is the whole of the protocol: the script exits zero
-    // exactly when the lock file below describes a server that is up. What went wrong is
-    // in the output either way -- and when Nix is what went wrong, this error is also what
-    // `isEvaluationError` reads to decide whether a retry could ever go differently.
+    // Throws on a non-zero exit. The script exits zero exactly when the lock file describes
+    // a running server; the error is what `isEvaluationError` inspects.
     await run(exe, args, {
       cwd: opts.flakeDir,
-      // One call now covers what two settings used to guard separately, so it is allowed
-      // both budgets: the build, and then the server coming up.
+      // Build plus server startup.
       timeoutMs:
         (Math.max(30, this.cfg.buildTimeoutSeconds) +
           this.connectTimeoutSeconds) *
         1000,
       onStderr: toOutput,
-      // A `shellHook` banner is the devShell talking to the user; it belongs on screen.
+      // `shellHook` output belongs on screen too.
       onStdout: toOutput,
       tty: opts.output?.tty,
     });
@@ -557,10 +478,7 @@ export function isPortOpen(port: number): Promise<boolean> {
   });
 }
 
-/**
- * `curl` is not guaranteed to exist, and the download is large enough that buffering it in
- * memory is wasteful, so stream it with the platform fetch into a file.
- */
+/** Stream a download to a file with the platform fetch; `curl` may not exist. */
 async function download(url: string, dest: string, progress?: (percent: number) => void): Promise<void> {
   const res = await fetch(url, { redirect: "follow" });
   const contentLength = parseInt(res.headers.get("content-length") as string);

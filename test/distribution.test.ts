@@ -4,13 +4,7 @@ import * as path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { findDistributionRoot } from "../src/remote/server";
 
-/**
- * Where an unpacked distribution begins.
- *
- * Microsoft wraps everything in a single `vscode-server-<platform>` directory; VSCodium's
- * REH tarball has no wrapper. Getting this wrong leaves a directory that looks extracted
- * and contains nothing usable, so both shapes are worth pinning.
- */
+/** Where an unpacked distribution begins: Microsoft's has a wrapper directory, VSCodium's not. */
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "nd-layout-"));
 const build = async (name: string, inner?: string): Promise<string> => {

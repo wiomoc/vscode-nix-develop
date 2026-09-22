@@ -16,20 +16,9 @@ async function sourceFiles(dir: string): Promise<string[]> {
 }
 
 /**
- * Source files have to survive `grep`.
- *
- * A single literal NUL or replacement character is enough for `file`, `grep` and `git grep`
- * to classify a whole file as binary and skip it -- returning nothing, with no error, so a
- * search for a symbol reports it as unused rather than reporting that it gave up. That cost
- * real time in this project: a review concluded `authorityId` was dead because
- * `authority.ts` contained both characters as literals and vanished from every search.
- *
- * Both characters are wanted there -- one as a field separator, one as the marker of a lossy
- * decode -- so the rule is about how they are *spelled*, not whether they may be used. An
- * escape compiles to exactly the same string and stays greppable.
- *
- * Other non-ASCII is deliberately allowed: user-facing strings use real ellipses and dashes,
- * and none of that makes a file disappear.
+ * Source files have to survive `grep`: a literal NUL or U+FFFD makes `grep` treat the
+ * whole file as binary and silently skip it. Write them as escapes. Other non-ASCII is
+ * fine.
  */
 const files = [
   ...(await sourceFiles(path.join(ROOT, "src"))),
@@ -45,10 +34,7 @@ describe("source hygiene", () => {
   const banned = [
     { name: "NUL", code: 0x0000, escape: "\\u0000" },
     { name: "U+FFFD", code: 0xfffd, escape: "\\uFFFD" },
-    // ESC does not make a file look binary, but it is invisible in an editor and this
-    // codebase writes plenty of it now that it renders Nix's output. A tool that takes its
-    // input as JSON turns the escape into the character without anyone asking, which is
-    // exactly how the three that were here got here.
+    // ESC is invisible in an editor, and JSON-based tools silently unescape it.
     { name: "ESC", code: 0x001b, escape: "\\u001b" },
   ];
 

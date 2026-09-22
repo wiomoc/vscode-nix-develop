@@ -18,17 +18,11 @@ import { ServerManager } from "./server";
 import { patchServerNode as patchServerLd } from "./server-ld-patch";
 
 /**
- * Resolves `vscode-remote://nix-devshell+<id>/...` authorities.
+ * Resolves `vscode-remote://nix-devshell+<id>/...` authorities, like Dev Containers and
+ * Remote-SSH do: VS Code calls `resolve()` on window startup and after every
+ * disconnection, and gets back the port of a server running inside `nix develop`.
  *
- * This is the mechanism Dev Containers and Remote-SSH use. VS Code calls `resolve()`
- * during startup of a remote window and again after every disconnection; the job is to
- * hand back a host and port where a VS Code *server* is listening. Starting that server
- * inside `nix develop` is what puts the remote extension host -- and with it terminals,
- * tasks, debuggers and language servers -- inside the devShell for real, rather than
- * approximating it by patching environment variables.
- *
- * Requires the `resolvers` proposed API, i.e. VS Code launched with
- * `--enable-proposed-api wiomoc.nix-devshell`.
+ * Requires the `resolvers` proposed API (`--enable-proposed-api wiomoc.nix-devshell`).
  */
 export class NixDevShellResolver implements vscode.RemoteAuthorityResolver {
   /** The terminal of the most recent build, kept only to retire it when the next starts. */
@@ -64,14 +58,8 @@ export class NixDevShellResolver implements vscode.RemoteAuthorityResolver {
         } catch (err) {
           const message = (err as Error).message ?? String(err);
           log.error(`resolving ${authority} failed: ${message}`);
-          // A flake that does not evaluate does not evaluate any differently a moment
-          // later, and `TemporarilyNotAvailable` is precisely what makes VS Code come
-          // back and ask again: the window would sit there re-running a build that
-          // cannot start. So an evaluation failure is reported as final, with what Nix
-          // said in place of the message the failure happened to carry -- the resolve
-          // may well have died at the server start, whose own message says only that it
-          // exited. Everything else -- a download, a builder, a port -- is worth another
-          // attempt, and keeps the retry it has always had.
+          // An evaluation failure is final, with Nix's own message: retrying via
+          // `TemporarilyNotAvailable` would rebuild in a loop. Anything else is retried.
           if (isEvaluationError(err)) {
             const summary = nixErrorSummary(err) ?? message;
             // Not awaited: this resolve has to reject now, so VS Code stops waiting on a
@@ -93,10 +81,8 @@ export class NixDevShellResolver implements vscode.RemoteAuthorityResolver {
   }
 
   /**
-   * Remote and local URIs address the same files here -- a devShell shares the machine's
-   * filesystem -- so the canonical form of a remote URI is simply the local path. Without
-   * this, features that compare URIs across the boundary (recently opened, source control)
-   * treat the same file as two different ones.
+   * A devShell shares the local filesystem, so a remote URI's canonical form is the local
+   * path. Otherwise features like recently opened see the same file twice.
    */
   getCanonicalURI(uri: vscode.Uri): vscode.ProviderResult<vscode.Uri> {
     return uri.with({ scheme: "file", authority: "" });
@@ -130,12 +116,8 @@ export class NixDevShellResolver implements vscode.RemoteAuthorityResolver {
       );
     }
 
-    // Only past the attach: a window landing on a server that is already up builds nothing,
-    // and an empty terminal announcing that would be noise.
-    //
-    // A failed resolve leaves its terminal open to be read, and VS Code calls `resolve`
-    // again for every retry -- so the one from the attempt being retried goes now, rather
-    // than stacking up a terminal per attempt under the same name.
+    // Created only when there is no server to reuse. A failed attempt leaves its terminal
+    // open; drop it so retries do not stack terminals.
     this.build?.dispose();
     const build =
       cfg.showBuildOutput === "never"
@@ -166,15 +148,8 @@ export class NixDevShellResolver implements vscode.RemoteAuthorityResolver {
   }
 
   /**
-   * Build the devShell, prepare a server and start it inside the shell.
-   *
-   * Everything Nix does happens in one call, at the bottom: `servers.start` enters the
-   * devShell exactly once, with `dist/provision.js` as its command. What is left here is
-   * what has to be true *before* the shell is entered -- a server on disk, a `node` that
-   * can start, the installable to build, and the directories this devShell owns.
-   *
-   * Split from `startOrAttach` only so the terminal showing all of it has somewhere to be
-   * created and disposed around a single call.
+   * Prepare everything needed before entering the devShell (server on disk, a `node`
+   * that can start, the installable, the directories), then `servers.start` it.
    */
   private async startFresh(opts: {
     cfg: NixDevShellConfig;
@@ -205,9 +180,7 @@ export class NixDevShellResolver implements vscode.RemoteAuthorityResolver {
     const root = path.join(this.context.globalStorageUri.fsPath, "remote");
     const extensionsDir = extensionsDirFor(root, key);
     const serverDataDir = path.join(root, "data", key);
-    // One profile per devShell, shared by everything that enters it. It lives beside the
-    // project rather than in global storage, and it stays there -- see `ensureProfile`.
-    // `undefined` is `nixDevShell.profile: none`, or a folder that could not be written to.
+    // One profile per devShell, beside the project; `undefined` means none.
     const profile = await ensureProfile(cfg, target.folder, target.devShell);
 
     const handle = await servers.start({
@@ -251,12 +224,7 @@ export class NixDevShellResolver implements vscode.RemoteAuthorityResolver {
     };
   }
 
-  /**
-   * The second bundle, beside this one.
-   *
-   * `dist/provision.js` is built by the same `esbuild.mjs` and shipped in the `.vsix`; it
-   * is run by the server's `node` inside `nix develop`, never loaded in here.
-   */
+  /** `dist/provision.js`, shipped beside this bundle and run inside `nix develop`. */
   private provisionScript(): string {
     return path.join(this.context.extensionUri.fsPath, "dist", "provision.js");
   }

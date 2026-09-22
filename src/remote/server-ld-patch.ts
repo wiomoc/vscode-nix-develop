@@ -15,17 +15,9 @@ export interface PatchedNode {
 }
 
 /**
- * The name of glibc's dynamic linker for this machine.
- *
- * The ELF interpreter is named per architecture, and the server's `node` has to be pointed
- * at the matching one. These are nixpkgs' own answers, read out of
- * `stdenv.cc.bintools.dynamicLinker` for each system rather than guessed.
- *
- * Only the two architectures VS Code ships a Linux server for are listed. `armv7l` is
- * deliberately absent: nixpkgs itself spells it `ld-linux*.so.3`, an unresolved glob, so
- * there is no single right answer to hardcode. Failing with the architecture named beats
- * handing `patchelf` a path that does not exist, which surfaces much later as the launcher
- * reporting "Patching complete." and then `cannot execute: required file not found`.
+ * The name of glibc's dynamic linker for this architecture, as nixpkgs'
+ * `stdenv.cc.bintools.dynamicLinker` spells it. `armv7l` is left out: nixpkgs gives only
+ * a glob for it.
  */
 export function glibcLinkerName(arch: string = process.arch): string {
   const byArch: Record<string, string> = {
@@ -42,17 +34,8 @@ export function glibcLinkerName(arch: string = process.arch): string {
 }
 
 /**
- * The `node` a server distribution ships, given its launcher.
- *
- * The launcher resolves its own root as `dirname(dirname(readlink -f "$0"))` and runs
- * `$ROOT/node`; the binary is the same one either way, so it is resolved the same way
- * rather than by assuming where the launcher was found.
- *
- * Two things want it: this file, which points it at a glibc it can start against, and
- * `ServerManager.start`, which runs `dist/provision.js` with it inside the devShell. A
- * devShell is not obliged to have a `node` of its own, and if it has one it is the
- * project's rather than the editor's -- so the one that is known to match the server is
- * the one to use.
+ * The `node` a server distribution ships, resolved the way the launcher does it:
+ * `dirname(dirname(readlink -f "$0"))/node`.
  */
 export async function serverNodePath(launcher: string): Promise<string> {
   return path.join(
@@ -62,36 +45,12 @@ export async function serverNodePath(launcher: string): Promise<string> {
 }
 
 /**
- * Give the server's bundled `node` a glibc it can actually start against.
+ * Point the server's bundled `node` at a glibc from nixpkgs, since `/lib64/ld-linux` does
+ * not exist on NixOS without nix-ld.
  *
- * The server ships a `node` linked against the host's glibc via `/lib64/ld-linux`, which
- * on NixOS does not exist, so it cannot start unless nix-ld happens to be configured. The
- * fix is `patchelf` and a glibc from nixpkgs, and it runs from here -- before anything
- * runs the launcher.
- *
- * `bin/code-server` has hooks for doing this itself, read out of the environment
- * (`VSCODE_SERVER_CUSTOM_GLIBC_LINKER`, `VSCODE_SERVER_CUSTOM_GLIBC_PATH`,
- * `VSCODE_SERVER_PATCHELF_PATH`), and they are deliberately not used. They stay set in
- * the environment the launcher hands to `node`, and the server calls itself unsupported
- * whenever the first one is set:
- *
- * ```js
- * isUnsupportedGlibc = (glibcVersion ? minorOf(glibcVersion) : 28) <= 27
- *   || !!process.env.VSCODE_SERVER_CUSTOM_GLIBC_LINKER;
- * ```
- *
- * The client turns that into "You are connected to an OS version that is unsupported by
- * Visual Studio Code" in every devShell window -- which is backwards here, since the
- * glibc being patched in is *newer* than the one the check is worried about. The launcher
- * also rewrites `node` in place, so a distribution that some other devShell's server is
- * still running fails with `open: Text file busy` and is exec'd unpatched anyway. Doing
- * the same two `patchelf` calls from here avoids both: no variable reaches the server,
- * and the rewrite goes through a copy that is renamed into place.
- *
- * `nixDevShell.remote.patchServerLd` turned off touches neither the binary nor the
- * environment, for a host that resolves `/lib64/ld-linux-*` on its own --
- * `programs.nix-ld`, or simply not NixOS. No nixpkgs build is evaluated at all, which is
- * the only way this costs nothing on a cold store.
+ * The launcher's own `VSCODE_SERVER_CUSTOM_GLIBC_*` hooks are not used: setting them makes
+ * the server report an "unsupported OS" in every window, and the launcher patches in
+ * place, which fails with `Text file busy` while another server runs the same binary.
  */
 export async function patchServerNode(
   cfg: NixDevShellConfig,
@@ -100,9 +59,7 @@ export async function patchServerNode(
 ): Promise<PatchedNode> {
   const node = await serverNodePath(launcher);
 
-  // `.out` is load-bearing: a bare `nixpkgs#glibc` resolves to glibc's *bin* output,
-  // which has no `lib/ld-linux-*` at all. Patching against it leaves a `node` that
-  // reports success here and then fails to exec with "required file not found".
+  // `.out`: a bare `nixpkgs#glibc` is the *bin* output, which has no `lib/ld-linux-*`.
   const [glibc, gccLib, patchelf] = await Promise.all([
     storePathOf(cfg, "nixpkgs#glibc.out", dir),
     storePathOf(cfg, "nixpkgs#gcc-unwrapped.lib", dir),
@@ -118,10 +75,7 @@ export async function patchServerNode(
     );
   }
 
-  // `--set-rpath` *replaces* the existing RPATH rather than adding to it. glibc alone is
-  // therefore not enough: the bundled node also links libstdc++, and dropping it leaves
-  // the freshly patched node failing with "libstdc++.so.6: cannot open shared object
-  // file". patchelf takes a colon-separated list, so both go in.
+  // `--set-rpath` replaces the RPATH, and node also needs libstdc++.
   const rpath = [path.join(glibc, "lib"), path.join(gccLib, "lib")].join(":");
   const exe = path.join(patchelf, "bin", "patchelf");
 
@@ -151,21 +105,15 @@ export async function patchServerNode(
   }
 
   log.info(`patching ${node} against ${glibc}`);
-  // Patch a copy and rename it into place rather than rewriting the binary where it lies.
-  // Servers outlive the window that started them and several devShells share one
-  // distribution, so there is usually a `node` from this very file already running --
-  // and Linux refuses to write to a running executable at all: patchelf fails with
-  // `open: Text file busy`, which is how this node came to be unpatched in the first
-  // place. A rename only swaps the directory entry, so the running servers keep the
-  // inode they started on and the next one gets the patched binary.
+  // Patch a copy and rename it into place: another server may be running this binary,
+  // and Linux refuses writes to a running executable (`Text file busy`).
   const tmp = `${node}.nix-devshell-${process.pid}`;
   try {
     await fs.copyFile(node, tmp);
     // Whether copyFile carries the mode over is platform-dependent, and a `node` that is
     // not executable fails much later and much less clearly.
     await fs.chmod(tmp, 0o755);
-    // RPATH before interpreter: patchelf can grow the binary while setting the rpath, and
-    // doing that second has been observed to undo the interpreter it just wrote.
+    // RPATH before interpreter, or growing the binary can undo the interpreter.
     // Refs https://github.com/NixOS/patchelf/issues/524
     await run(exe, ["--set-rpath", rpath, tmp], {
       cwd: dir,
@@ -198,9 +146,7 @@ async function storePathOf(
     { impure: false },
   );
   const { stdout } = await run(exe, args, { cwd, timeoutMs: 600_000 });
-  // One line per output. Anything but a single path means the installable did not name
-  // one output, and picking from the list would be a guess -- which is how the wrong
-  // glibc output got used here once already.
+  // One line per output; anything but exactly one path is an error, not a guess.
   const paths = stdout
     .trim()
     .split("\n")

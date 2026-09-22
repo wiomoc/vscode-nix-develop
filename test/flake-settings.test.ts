@@ -11,11 +11,8 @@ import {
 } from "../src/provision/settings";
 
 /**
- * Settings a devShell declares for the editor.
- *
- * The parsing is where the risk is: a derivation attribute is always a string, so the same
- * `vscodeSettings` may arrive as JSON, as a list flattened onto one line, or as a here-doc
- * of `key=value` lines, and a store path must survive all three untouched.
+ * Settings a devShell declares: JSON, a flattened list, or `key=value` lines, with store
+ * paths surviving untouched.
  */
 describe("per-devShell settings", () => {
   it("reads a JSON object, as builtins.toJSON renders it", () => {

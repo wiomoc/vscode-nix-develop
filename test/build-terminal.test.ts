@@ -2,13 +2,7 @@ import { recorded } from "./activation-stub";
 import { BuildTerminal, toCrlf } from "../src/utils/build-terminal";
 import { describe, expect, it } from "vitest";
 
-/**
- * The terminal that shows `nix develop` building.
- *
- * Two things about it are easy to get wrong and invisible until a user is watching a build
- * fail: output written before VS Code renders the terminal, and Unix line endings arriving
- * at something that moves the cursor down but not back.
- */
+/** The build terminal: output written before rendering, and line endings. */
 describe("build terminal", () => {
   it("bare newlines become CRLF, so lines start at column one", () => {
     expect(toCrlf("one\ntwo\n")).toEqual("one\r\ntwo\r\n");

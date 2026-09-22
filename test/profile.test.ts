@@ -10,12 +10,7 @@ const cfg = { profile: "persistent" } as NixDevShellConfig;
 const exists = (p: string) =>
   fs.stat(p).then(() => true).catch(() => false);
 
-/**
- * Where a devShell's GC root goes, and what gets written beside it.
- *
- * These roots live in the user's checkout, so the two things that matter are that a name
- * is always a usable path component and that nothing here can end up committed.
- */
+/** A devShell's GC root: always a usable path component, and never committed. */
 const folder = await fs.mkdtemp(path.join(os.tmpdir(), "nd-profile-dir-"));
 
 describe("devShell profiles", () => {

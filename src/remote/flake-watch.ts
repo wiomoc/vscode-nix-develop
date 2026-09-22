@@ -15,16 +15,9 @@ const FLAKE_FILES = ["flake.nix", "flake.lock"];
 const SETTLE_MS = 750;
 
 /**
- * What the devShell was built from, as one value.
- *
- * Contents rather than mtime and size, because saving a file the editor has not changed --
- * or `nix flake update` writing back an identical lock -- must not be reported as a change
- * the user has to restart for.
- *
- * Read synchronously: the baseline has to be the flake as it was when the window opened,
- * and an asynchronous read can lose to an edit that lands a tick later -- which would
- * quietly take that edit as the baseline and never report it. Two small files at window
- * startup, on a path that already runs `nix develop`.
+ * A digest of `flake.nix` and `flake.lock` contents, so saving unchanged files is not a
+ * change. Read synchronously, so an edit landing right after startup cannot become the
+ * baseline.
  */
 function digest(dir: string): string {
   const hash = crypto.createHash("sha256");
@@ -41,18 +34,11 @@ function digest(dir: string): string {
 }
 
 /**
- * Watch the flake this devShell window was opened against, and offer to restart on a change.
+ * Watch the flake this devShell window was built from, and offer a restart when it
+ * changes, since the running shell keeps the old toolchain.
  *
- * The window's extension host is running inside a shell that was built when the window
- * opened. Editing the flake afterwards changes nothing about the running shell -- every
- * terminal, task and language server still has the old toolchain -- and until now nothing
- * said so, which is indistinguishable from the extension having ignored the edit.
- *
- * `fs.watch` rather than `workspace.createFileSystemWatcher`: this is the UI side of the
- * extension, so the flake is an ordinary local path, while the window's own folders are
- * `vscode-remote://` URIs that no local pattern can be hung off. The *directory* is
- * watched rather than the two files, because a replace-by-rename -- how `nix flake update`
- * writes, and how an atomic save writes -- leaves a watch on the old file watching nothing.
+ * `fs.watch`, since the flake is a local path while the window's folders are remote. The
+ * directory is watched, because an atomic save replaces the file by rename.
  */
 export function watchDevShellFlake(
   context: vscode.ExtensionContext,
@@ -128,12 +114,8 @@ export function watchDevShellFlake(
 }
 
 /**
- * Put this window back on a devShell built from the flake as it is now.
- *
- * The reload is what re-runs the resolver, and stopping the server first is what stops the
- * resolver attaching to the one already listening -- a server outlives its window, so
- * reloading on its own would come straight back to the same shell. This extension runs on
- * the UI side, so it survives its own server being stopped and can see the reload through.
+ * Rebuild this window's devShell: stop its server, so the resolver cannot reattach to it,
+ * then reload.
  */
 export async function restartDevShellWindow(context: vscode.ExtensionContext): Promise<void> {
   const authority = vscode.env.remoteAuthority;

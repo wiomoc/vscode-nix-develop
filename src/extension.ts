@@ -35,9 +35,8 @@ const sessions = new Map<string, DevShellSession>();
 let statusBar: StatusBar;
 
 /**
- * A watched flake appeared or vanished. Only this module can say what the workspace as a
- * whole now looks like: the menus' `when` clauses and the single status bar are shared by
- * every folder, so one folder losing its flake does not mean the workspace has none.
+ * A watched flake appeared or vanished. Contexts and the status bar are workspace-wide,
+ * so they are recomputed across all folders here.
  */
 async function flakeChanged(): Promise<void> {
   await setContexts();
@@ -54,18 +53,65 @@ function anyFlake(): boolean {
   return false;
 }
 
+/**
+ * Two kinds of window:
+ *
+ * - **local** (no remote authority): finds flakes per folder and offers the picker.
+ *   Choosing a devShell opens a second window on a `nix-devshell+…` authority.
+ * - **devShell** (`nix-devshell+…`): already runs inside the shell. It only shows which
+ *   one and watches the flake for staleness.
+ *
+ * Shared by both, above the branch: the resolver (VS Code re-resolves on every
+ * reconnect), the status bar, the commands, and sweeping stale server locks.
+ */
 export async function activate(
   context: vscode.ExtensionContext,
 ): Promise<void> {
   context.subscriptions.push(initLog());
 
   registerResolver(context);
-  // Housekeeping, not a precondition: nothing below waits for it.
-  void sweepServerLocks(context);
-
   statusBar = new StatusBar();
   context.subscriptions.push(statusBar);
+  registerCommands(context);
+  // Not awaited: nothing here is a precondition for anything below.
+  void sweepServerLocks(context);
 
+  if (inDevShellWindow()) {
+    await activateInDevShellWindow(context);
+  } else {
+    await activateLocalWindow(context);
+  }
+}
+
+/** A window running inside a devShell: show which one, and watch its flake. */
+async function activateInDevShellWindow(
+  context: vscode.ExtensionContext,
+): Promise<void> {
+  await setContexts();
+
+  const authority = vscode.env.remoteAuthority ?? "";
+  log.info(`running inside devShell window (${authority})`);
+  // NIX_DEVSHELL_SHELL is set on the *remote* extension host; this extension is a UI
+  // extension, so the name comes out of the authority itself.
+  const target = decodeAuthority(authority);
+  const active: StatusState = {
+    kind: "active",
+    label: target?.devShell ?? "devShell",
+    summary: "the extension host is running inside this devShell",
+  };
+  statusBar.set(active);
+
+  context.subscriptions.push(watchDevShellFlake(context, statusBar, active));
+  void offerExtensionSync(context).catch((err) => log.error(err as Error));
+}
+
+/**
+ * A local window: where a devShell is chosen. `syncSessions` must run before
+ * `setContexts`, since `hasFlake` is derived from the sessions.
+ */
+async function activateLocalWindow(
+  context: vscode.ExtensionContext,
+): Promise<void> {
   syncSessions(context);
   await setContexts();
 
@@ -79,17 +125,37 @@ export async function activate(
       if (!e.affectsConfiguration(SECTION)) return;
       for (const session of sessions.values()) {
         if (e.affectsConfiguration(SECTION, session.workspaceFolder.uri)) {
-          // Silent: a settings change should refresh the status bar (flakeDirectory can
-          // move which flake this folder means) without popping the picker offer.
+          // Refresh the status bar without offering the picker again.
           await session.activate({ silent: true });
         }
       }
     }),
 
-    // Only a devShell window has a devShell to select: it is the one this window is
-    // running in, and the authority registry is what says which flake and folder it came
-    // from. Picking one from a local window means opening a window against it, which is
-    // `Reopen in devShell` and nothing else.
+    { dispose: disposeSessions },
+  );
+
+  // After a failed build, open the file at the position Nix complained about. Awaited:
+  // it decides whether the sessions below stay silent.
+  const recovering = await openPendingFile(context).catch((err) => {
+    log.error(err as Error);
+    return false;
+  });
+
+  // Not awaited. No picker offer right after a failed evaluation: that is what broke.
+  for (const session of sessions.values()) {
+    void session
+      .activate({ silent: recovering })
+      .catch((err) => log.error(err as Error));
+  }
+}
+
+/**
+ * Every contributed command, registered in both scopes so nothing hits "command not
+ * found"; the `when` clauses in package.json keep the palette scoped.
+ */
+function registerCommands(context: vscode.ExtensionContext): void {
+  context.subscriptions.push(
+    // Only a devShell window can switch; a local window uses `Reopen in devShell`.
     vscode.commands.registerCommand("nixDevShell.selectDevShell", async () => {
       if (!inDevShellWindow()) {
         void vscode.window.showInformationMessage(
@@ -106,7 +172,6 @@ export async function activate(
 
       const session = sessions.get(folder.uri.toString());
       if (!session?.hasFlake()) {
-        // Previously this returned silently, leaving the command looking broken.
         void vscode.window.showWarningMessage(
           `No flake.nix was found for ${folder.name}. Check nixDevShell.flakeDirectory.`,
         );
@@ -135,50 +200,7 @@ export async function activate(
       const folder = vscode.workspace.workspaceFolders?.[0];
       await killServer(context, folder);
     }),
-
-    { dispose: disposeSessions },
   );
-
-  // In a devShell window the server was launched inside `nix develop`, so the environment
-  // is already correct everywhere; re-applying it locally would be wrong as well as
-  // pointless, since this extension runs on the UI side.
-  if (inDevShellWindow()) {
-    const authority = vscode.env.remoteAuthority ?? "";
-    log.info(`running inside devShell window (${authority})`);
-    // NIX_DEVSHELL_SHELL is set on the *remote* extension host; this extension is a UI
-    // extension, so the name comes out of the authority itself.
-    const target = decodeAuthority(authority);
-    const active: StatusState = {
-      kind: "active",
-      label: target?.devShell ?? "devShell",
-      summary: "the extension host is running inside this devShell",
-    };
-    statusBar.set(active);
-    // The shell this window runs in was built when the window opened. Editing the flake
-    // afterwards leaves every terminal and language server on the old toolchain, so the
-    // window has to say so -- and offer the reload that is the only way to pick it up.
-    context.subscriptions.push(watchDevShellFlake(context, statusBar, active));
-    void offerExtensionSync(context).catch((err) => log.error(err as Error));
-    return;
-  }
-
-  // A window that is here because a devShell could not be built has a file waiting to be
-  // opened at the position Nix complained about. Awaited, because whether there was one
-  // decides how the sessions below announce themselves.
-  const recovering = await openPendingFile(context).catch((err) => {
-    log.error(err as Error);
-    return false;
-  });
-
-  // Fire-and-forget: this shows the status bar and may offer the picker, neither of which
-  // should hold up the rest of the window. `nixDevShell.promptWhenUnset` is what silences
-  // the offer for a workspace that does not want it -- and so does a flake that has just
-  // failed to evaluate, where offering to pick a devShell is offering the thing that broke.
-  for (const session of sessions.values()) {
-    void session
-      .activate({ silent: recovering })
-      .catch((err) => log.error(err as Error));
-  }
 }
 
 export function deactivate(): void {
@@ -186,9 +208,8 @@ export function deactivate(): void {
 }
 
 /**
- * The `resolvers` proposal is only granted when VS Code is started with
- * `--enable-proposed-api`, so the API may simply be absent. Failing softly keeps the rest
- * of the extension working in a stock editor.
+ * The `resolvers` proposed API is absent unless enabled in argv.json; the rest of the
+ * extension still works without it.
  */
 function registerResolver(context: vscode.ExtensionContext): void {
   const api = vscode.workspace as Partial<typeof vscode.workspace>;
@@ -235,6 +256,13 @@ async function setContexts(): Promise<void> {
 }
 
 function syncSessions(context: vscode.ExtensionContext): void {
+  // A devShell window indexes no flakes: the authority names the shell and
+  // `watchDevShellFlake` already watches the flake.
+  if (inDevShellWindow()) {
+    disposeSessions();
+    return;
+  }
+
   const folders = vscode.workspace.workspaceFolders ?? [];
   const seen = new Set<string>();
 
@@ -242,13 +270,9 @@ function syncSessions(context: vscode.ExtensionContext): void {
     const key = folder.uri.toString();
     seen.add(key);
     if (sessions.has(key)) continue;
-    // This extension runs on the UI side, so in a remote window the folder URIs are not
-    // local paths and none of the local filesystem logic applies.
+    // UI extension: only local folders are real paths here.
     if (folder.uri.scheme !== "file") continue;
-    // Kept even when the folder has no flake.nix yet: a session is little more than a file
-    // watcher, and dropping the ones without a flake is what left nothing watching for a
-    // flake appearing. `hasFlake()` is what decides whether a session has anything to
-    // offer; see `anyFlake`.
+    // Kept without a flake.nix too, so the session can notice one appearing.
     const session = new DevShellSession(
       context,
       folder,

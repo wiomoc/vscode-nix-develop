@@ -55,14 +55,8 @@ const FLAKE = `{
 `;
 
 /**
- * Exercises the real `nix` CLI, which needs a network-capable Nix and takes minutes on a
- * cold store -- hence the `e2e` tag, which is what keeps it out of a plain `npm test`.
- *
- * What is under test is the one call a window now makes: `developCommand` assembles the
- * argv, `run` carries it out, and whatever was named after `--command` runs *inside* the
- * built shell. `ServerManager.start` does exactly this with `dist/provision.js` as the
- * command; here it is a `bash -c` that prints what it can see, which is the same question
- * asked in a form a test can read.
+ * Exercises the real `nix` CLI (network, minutes on a cold store; tagged `e2e`):
+ * `developCommand` plus `run`, with a `bash -c` in place of `dist/provision.js`.
  */
 describe("nix (end-to-end)", { tags: ["e2e"] }, () => {
   let dir: string;
@@ -188,11 +182,8 @@ describe("nix (end-to-end)", { tags: ["e2e"] }, () => {
     expect(link.length > 0, "profile symlink should exist").toBe(true);
   });
 
-  // The same shell again, this time with a terminal to write to. Everything Nix withholds
-  // over a pipe -- colour, and the progress bar it redraws in place -- depends on this and
-  // on nothing else, so it is worth proving against the real CLI rather than assuming.
-  // `NIX_DEVSHELL_APP_ROOT` is an installed VS Code's `resources/app`, which is where the
-  // pty comes from; without one these report themselves as skipped.
+  // The same shell under a pty, where Nix draws colour and its progress bar. The pty
+  // comes from `NIX_DEVSHELL_APP_ROOT`; without it these are skipped.
   const appRoot = process.env.NIX_DEVSHELL_APP_ROOT;
 
   describe.skipIf(appRoot === undefined)("given a terminal", () => {

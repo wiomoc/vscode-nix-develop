@@ -21,11 +21,8 @@ const SYSTEM_KEY = "nixDevShell.currentSystem";
 export const FLAKE_DEBOUNCE_MS = 750;
 
 /**
- * Tracks the devShell selection for one workspace folder.
- *
- * A selected devShell is used by opening a window whose server runs inside `nix develop`,
- * so this class never builds or applies an environment itself: it discovers the available
- * shells, asks which one to use, and hands the answer off.
+ * One workspace folder's flake: discovers its devShells and asks which to use. It never
+ * enters a shell itself; the choice opens a devShell window.
  */
 export class DevShellSession implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
@@ -40,13 +37,7 @@ export class DevShellSession implements vscode.Disposable {
     private readonly context: vscode.ExtensionContext,
     private readonly folder: vscode.WorkspaceFolder,
     private readonly status: StatusBar,
-    /**
-     * Called when this folder gained or lost its `flake.nix`.
-     *
-     * The session knows that its own state went stale, but which folders count as having a
-     * flake -- the `when`-clause contexts the menus read, and the status bar shared by every
-     * folder -- is the extension host's to re-derive.
-     */
+    /** Called when this folder gained or lost its `flake.nix`, to refresh workspace-wide state. */
     private readonly onFlakeChanged: () => Promise<void>,
   ) {
     this.flakePresent = this.hasFlake();
@@ -69,10 +60,7 @@ export class DevShellSession implements vscode.Disposable {
     return fs.existsSync(path.join(this.dir(), "flake.nix"));
   }
 
-  /**
-   * The Nix system double, persisted across windows. It cannot change for a given machine,
-   * and resolving it costs a Nix process on the path to showing the picker.
-   */
+  /** The Nix system double, persisted across windows to spare a Nix call per picker. */
   private async system(
     cfg: NixDevShellConfig,
     token?: vscode.CancellationToken,
@@ -86,12 +74,7 @@ export class DevShellSession implements vscode.Disposable {
 
   // ---------------------------------------------------------------- selection
 
-  /**
-   * The devShells this flake offers, cached against the flake files' mtime and size.
-   *
-   * Re-evaluating on every picker open is wasted work: the answer can only change when
-   * flake.nix or flake.lock does.
-   */
+  /** The devShells this flake offers, cached against the flake files' mtime and size. */
   private async devShells(cfg: NixDevShellConfig): Promise<DevShell[]> {
     const stamp = await this.flakeStamp();
     if (this.shellCache && this.shellCache.stamp === stamp) {
@@ -136,11 +119,7 @@ export class DevShellSession implements vscode.Disposable {
     return parts.join("|");
   }
 
-  /**
-   * A slow evaluation almost always means Nix is hashing the whole directory because the
-   * flake is not in a Git work tree -- there is no source filtering, so build outputs and
-   * dependency directories are copied every time.
-   */
+  /** A slow evaluation usually means the flake is outside Git, so Nix copies everything. */
   private async warnSlowEvaluation(elapsed: number): Promise<void> {
     if (this.warnedSlow) return;
     this.warnedSlow = true;
@@ -161,14 +140,8 @@ export class DevShellSession implements vscode.Disposable {
   }
 
   /**
-   * Ask which devShell to use.
-   *
-   * The answer is not written anywhere: it takes effect by opening a window against it,
-   * which is the host's job, and the window's authority is what remembers it afterwards.
-   *
-   * `.envrc` is the only place left where a project can state which shell it means, so a
-   * devShell it names is offered as the marked entry. It is a default, not a decision --
-   * the picker still lists everything.
+   * Ask which devShell to use. Nothing is stored; the window's authority records it. A
+   * devShell named in `.envrc` is offered as the default.
    */
   async promptForDevShell(): Promise<Selection> {
     const cfg = this.cfg();
@@ -187,11 +160,8 @@ export class DevShellSession implements vscode.Disposable {
   // ----------------------------------------------------------------- activate
 
   /**
-   * Bring the status bar in line with the workspace and offer the next step.
-   *
-   * There is nothing to build here, and nothing to reconcile: a devShell is chosen by
-   * opening a window against it, and the window's authority is the only record of that
-   * choice. A local window is therefore always "no devShell selected".
+   * Update the status bar and offer the picker. A local window never has a devShell
+   * selected; choosing one opens another window.
    */
   async activate(opts: { silent?: boolean } = {}): Promise<void> {
     if (!this.hasFlake()) return;
@@ -225,17 +195,10 @@ export class DevShellSession implements vscode.Disposable {
 
   // -------------------------------------------------------------------- misc
 
-  /**
-   * React to the flake or its lock changing underneath us.
-   *
-   * Three things go stale when a flake is written: the cached devShell list, whether this
-   * folder has a flake at all -- `flake.nix` can be deleted, or appear in a folder that is
-   * already tracked -- and everything the host derives from that.
-   */
+  /** React to the flake or its lock changing, appearing or disappearing. */
   private watchFlake(): void {
-    // Folder-wide rather than bound to `dir()`, because `nixDevShell.flakeDirectory` can
-    // move which directory this session means without the watcher being rebuilt. Which
-    // directory an event has to be in is therefore decided when the event arrives.
+    // Folder-wide, since `nixDevShell.flakeDirectory` can change without rebuilding the
+    // watcher; events are filtered by `dir()` when they arrive.
     const pattern = new vscode.RelativePattern(
       this.folder,
       "**/flake.{nix,lock}",
@@ -270,10 +233,8 @@ export class DevShellSession implements vscode.Disposable {
   }
 
   /**
-   * The flake was written: drop what was derived from it and let the host catch up.
-   *
-   * The picker is only offered when the flake has just *appeared*. Offering on every edit
-   * would put a notification in front of anyone working on their flake.nix.
+   * The flake was written: drop cached state. The picker is only offered when the flake
+   * has just appeared, not on every edit.
    */
   private async flakeChanged(names: string): Promise<void> {
     this.shellCache = undefined;

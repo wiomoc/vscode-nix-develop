@@ -26,12 +26,8 @@ const cfg: NixDevShellConfig = {
 };
 
 /**
- * Acquiring a server end to end, against a local HTTP server standing in for a release.
- *
- * The unit tests above check what URL a product produces; this checks that `ensureServer`
- * actually asks for that URL and can use what comes back. Worth its own test because
- * `serverDownloadUrl(commit, configured)` takes two strings in a row -- swapping them would
- * typecheck perfectly and only show up as a 404 in the wild.
+ * Acquiring a server end to end, against a local HTTP server. Catches e.g. swapped
+ * arguments to `serverDownloadUrl(commit, configured)`, which would still typecheck.
  */
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "nd-acquire-"));

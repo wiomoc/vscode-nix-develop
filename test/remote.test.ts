@@ -33,9 +33,7 @@ describe("remote authorities", () => {
   });
 
   it("survives the authority being lower-cased", () => {
-    // A URI authority is case-insensitive by RFC 3986, and VS Code acts on it: an authority
-    // restored from persisted state after a restart comes back lower-cased. An encoding that
-    // depends on case (base64) silently stops resolving the moment the editor is restarted.
+    // VS Code lower-cases authorities restored after a restart.
     for (const t of [
       target,
       { folder: "/w/MixedCase/Proj", flakeDir: "/w/MixedCase/Proj", devShell: "CI" },
@@ -248,9 +246,7 @@ describe("glibc linker", () => {
   });
 
   it("refuses an architecture it has no linker for", () => {
-    // nixpkgs spells armv7l's as the unresolved glob `ld-linux*.so.3`, so there is no
-    // single name to hardcode; a loud failure beats patching against a path that is not
-    // there, which only shows up when the server fails to exec its own node.
+    // nixpkgs only has a glob for armv7l's linker, so fail loudly rather than guess.
     let message = "";
     try {
       glibcLinkerName("arm");
@@ -300,9 +296,7 @@ describe("stopping a devShell server", () => {
 });
 
 describe("reopening without the proposed API", () => {
-  // `resolvers` is granted at launch and never mid-session, so the only useful thing to
-  // say is how to grant it for the *next* launch -- and the durable way to do that is
-  // argv.json, not a --enable-proposed-api flag that one dock click would drop.
+  // The fix to offer is argv.json, which persists across launches.
   const folder = { uri: stub.Uri.file("/w/proj"), name: "proj", index: 0 };
 
   it("points at argv.json and names the id to put there", async () => {

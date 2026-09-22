@@ -9,19 +9,9 @@ import { run, SubprocessError } from "./utils/run-subprocess";
 const FEATURE_ARGS = ["--extra-experimental-features", "nix-command flakes"];
 
 /**
- * What Nix is asked for when something is rendering its output rather than parsing it.
- *
- * `bar-with-logs` is two things: the progress bar, and every line the builders print -- the
- * half `-L` turns on. The second half arrives whatever the child is writing to. The first
- * is Nix's own decision, taken by calling `isatty` on its stderr and overridden by nothing:
- * there is no `--color`, no config key, no environment variable. So the bar appears only on
- * the `CaptureOptions.tty` path, where `loadPty` has borrowed the editor's pty; over a pipe
- * the same flag still turns the output from the few lines Nix prints by default into the
- * whole build log, which is the half that says why an evaluation failed.
- *
- * Safe to ask for on the path that starts a server, now that the port comes back in a file
- * rather than by matching a line in this stream: a progress bar redrawing over the output
- * has nothing left to interleave with.
+ * `--log-format` for output that is rendered rather than parsed: the full build log
+ * (like `-L`), plus the progress bar when Nix's stderr is a tty. Nix decides the bar via
+ * `isatty` alone, so it only appears on the `CaptureOptions.tty` path.
  */
 export const BUILD_LOG_FORMAT = "bar-with-logs";
 
@@ -32,16 +22,8 @@ export interface NixCommand {
 }
 
 /**
- * How this extension invokes Nix.
- *
- * Every `nix` spawn is assembled here, so the rules that apply to all of them -- flakes are
- * gated behind experimental features, and `nixDevShell.impure` is the user's answer to
- * whether evaluation may reach outside the store -- are stated exactly once.
- *
- * The subcommand is a separate argument because the two flags sit on opposite sides of it:
- * `--extra-experimental-features` is a top-level flag, while `--impure` belongs to the
- * subcommand and Nix refuses it with `unrecognised flag` if it appears any earlier.
- * `--log-format` is top-level too, so it joins the features rather than the arguments.
+ * Every `nix` invocation. The subcommand is separate because `--impure` must follow it,
+ * while `--extra-experimental-features` and `--log-format` must precede it.
  */
 export function nixCommand(
   cfg: NixDevShellConfig,
@@ -66,32 +48,17 @@ export interface DevelopOptions {
   /** A full flake installable, as produced by `toInstallable`. */
   installable: string;
   /**
-   * Where Nix keeps the built shell, or `undefined` for no GC root at all.
-   *
-   * `--profile` is the only thing that makes a devShell a GC root: without one, `nix store
-   * gc` is free to collect paths that a running server -- or the next activation -- still
-   * depends on. Nix's GC does scan `/proc` for store paths a live process references, so a
-   * running server is not defenceless, but that covers neither the gap between building the
-   * shell and starting the server nor a GC whose scan happened before the server appeared.
-   *
-   * Whether to keep one is the user's call (`nixDevShell.profile`), so this is nullable --
-   * but not optional. Making it part of the type means a caller has to say which it wants
-   * rather than silently omitting the root; `ensureProfile` in `profile.ts` is what
-   * answers the question.
+   * `--profile` path, the devShell's GC root; `undefined` for none. Required rather than
+   * optional so callers must decide (see `ensureProfile`).
    */
   profile: string | undefined;
   /** argv exec'd inside the shell, via `--command`. */
   command: string[];
-  /**
-   * `--log-format`, for a caller that is rendering Nix's output rather than parsing it.
-   * See `BUILD_LOG_FORMAT`; omitted, Nix decides, which over a pipe means terse lines.
-   */
+  /** `--log-format`; see `BUILD_LOG_FORMAT`. */
   logFormat?: string;
 }
 
-/**
- * The one way into a devShell.
- */
+/** The one way into a devShell. */
 export async function developCommand(
   cfg: NixDevShellConfig,
   opts: DevelopOptions,
@@ -112,13 +79,7 @@ export async function developCommand(
   );
 }
 
-/**
- * The Nix system double for this machine, e.g. `x86_64-linux`.
- *
- * Spawning Nix for a value that never changes is pure latency on the path to showing the
- * devShell picker, so the answer is memoised for the life of the extension host. Callers
- * that need it across windows should persist it themselves.
- */
+/** The Nix system double for this machine, e.g. `x86_64-linux`. Memoised. */
 let systemDouble: string | undefined;
 
 export async function currentSystem(
@@ -127,7 +88,7 @@ export async function currentSystem(
   token?: vscode.CancellationToken,
 ): Promise<string> {
   if (systemDouble) return systemDouble;
-  // `builtins.currentSystem` is impure by definition, so this one does not ask the config.
+  // `builtins.currentSystem` requires `--impure`.
   const { exe, args } = nixCommand(cfg, ["eval"], ["--raw", "--expr", "builtins.currentSystem"], {
     impure: true,
   });
@@ -150,12 +111,8 @@ export interface DevShell {
 }
 
 /**
- * Enumerate `devShells.<system>`.
- *
- * Preferred path is a targeted `nix eval ... --apply builtins.attrNames`, which only
- * forces the attribute names. `nix flake show` is the fallback: it is richer (it gives
- * derivation names) but evaluates far more of the flake and fails on outputs that
- * cannot be evaluated on this system.
+ * Enumerate `devShells.<system>` via `nix eval --apply builtins.attrNames`, falling back
+ * to the slower `nix flake show`.
  */
 export async function listDevShells(
   cfg: NixDevShellConfig,
@@ -214,13 +171,8 @@ async function listViaFlakeShow(
 const pathRefDirs = new Set<string>();
 
 /**
- * How to address a local flake directory.
- *
- * A *bare* path lets Nix notice the directory is in a Git work tree and use the Git
- * source, which contains only tracked files. A `path:` ref instead hashes and copies the
- * whole directory -- `node_modules`, `target/`, build outputs and all -- on every single
- * evaluation. On a 12 GB checkout with 800 tracked files that is the difference between
- * 0.07s and not finishing at all, so `path:` is a fallback, never the default.
+ * How to address a local flake directory. A bare path uses the Git source (tracked files
+ * only); `path:` copies the whole directory on every evaluation, so it is only a fallback.
  */
 export function flakeRefFor(dir: string): string {
   return pathRefDirs.has(dir) ? `path:${dir}` : dir;
@@ -237,13 +189,9 @@ export function markPathRefRequired(dir: string): void {
 }
 
 /**
- * Everything a failure said -- its output and its message -- flattened to a single line.
- *
- * Nix's output arrives here in two shapes: clean lines when it ran over a pipe, and a
- * coloured, redrawn, terminal-wrapped stream when it was handed a pty. Stripping the escape
- * codes and collapsing every run of whitespace lets one pattern read either. What it cannot
- * undo is a *soft* wrap, which splits a word rather than separating two, so the patterns
- * below stay short enough to have somewhere to match.
+ * A failure's output and message as one line, escape codes stripped and whitespace
+ * collapsed, so the same patterns match pipe and pty output. Soft wraps can still split
+ * words, so keep patterns short.
  */
 function failureText(err: unknown): string {
   const raw = `${(err as SubprocessError)?.stderr ?? ""}\n${(err as Error)?.message ?? ""}`;
@@ -258,29 +206,19 @@ export function isUntrackedFlakeError(err: unknown): boolean {
 }
 
 /**
- * A failure of the *build*, or of the network it needed. Tested first, because the log a
- * builder failed with is arbitrary text: a compiler saying `syntax error` is a build that
- * may well go differently once the source is fixed, not a flake that cannot be evaluated.
+ * A build or network failure. Tested first: a builder's log is arbitrary text and may
+ * match `EVALUATION_FAILED` too.
  */
 const BUILD_FAILED =
   /builder for .{0,120}? failed|build of .{0,120}? failed|failed to build|hash mismatch|unable to download|unable to fetch|Connection (refused|timed out|reset)|curl error|SSL|Timed out after/i;
 
-/**
- * Nix's vocabulary for giving up before anything was built: the flake does not parse, does
- * not have the attribute, or is not there at all.
- */
+/** Nix giving up before building: the flake does not parse, lacks the attribute, or is missing. */
 const EVALUATION_FAILED =
   /syntax error|undefined variable|infinite recursion|attribute '[^']*' missing|does not provide attribute|is not a flake|does not contain a ['"]?flake\.nix|could not find a flake\.nix|cannot find flake|not tracked by Git|called without required argument|while evaluating|cannot coerce/i;
 
 /**
- * Does this failure mean Nix could not *evaluate* the flake?
- *
- * The distinction is what a second attempt is worth. A download that failed, a builder that
- * ran out of memory, a store daemon that was not listening -- those are worth retrying, and
- * are what `TemporarilyNotAvailable` exists for. A flake with a typo in it evaluates exactly
- * the same way next time, so a retry is a loop: the same build refuses to start, the same
- * error scrolls past, and nothing moves until the user edits the file. Such a failure is
- * reported as final so the user gets to read it.
+ * Does this failure mean Nix could not evaluate the flake? Such a failure is final:
+ * retrying it just loops until the user edits the file.
  */
 export function isEvaluationError(err: unknown): boolean {
   const text = failureText(err);
@@ -288,12 +226,7 @@ export function isEvaluationError(err: unknown): boolean {
   return EVALUATION_FAILED.test(text);
 }
 
-/**
- * What Nix actually complained about, for somewhere that shows one line rather than a log.
- *
- * Everything from the first `error:` onwards: that is the trace *and* the cause beneath it,
- * and a caller showing this has no terminal to scroll, so the trace is worth the characters.
- */
+/** Everything from the first `error:` onwards, for a one-line display. */
 export function nixErrorSummary(err: unknown): string | undefined {
   const text = failureText(err);
   const at = text.search(/error:/i);
@@ -329,12 +262,8 @@ export function toInstallable(selection: string, dir: string, system: string): s
 const ANSI_CSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 
 /**
- * One line of Nix output as plain text, for somewhere that cannot render a terminal.
- *
- * Asking Nix for its progress bar means the same stream now carries escape codes and
- * in-place redraws. A progress notification would print those literally, so they are
- * stripped -- and since a redrawn line is several frames separated by carriage returns,
- * only the last frame is kept: that is what the line currently says.
+ * One line of Nix output as plain text: escape codes stripped, and only the last
+ * `\r`-separated frame of a redrawn line kept.
  */
 export function plainText(line: string): string {
   const latest = line.split("\r").pop() ?? "";
@@ -354,14 +283,8 @@ export interface NixErrorLocation {
 const ERROR_LOCATION = /\bat ((?:[A-Za-z]:)?[^\s:]*\.nix):(\d+):(\d+)/g;
 
 /**
- * Every position Nix named, in the order it printed them.
- *
- * A failure is rarely one position: Nix prints a trace, outermost frame first, and the
- * innermost one -- the last -- is the expression that actually went wrong. But the
- * innermost frame is often inside a dependency in the store, or inside nixpkgs, which is
- * no use to someone who wants to fix their own flake. So the order is preserved rather
- * than resolved here, and the caller walks it from the innermost outwards until it finds a
- * position it can put an editor on.
+ * Every position Nix named, outermost frame first. The innermost is often inside the
+ * store, so the caller walks back to one it can open.
  */
 export function nixErrorLocations(err: unknown): NixErrorLocation[] {
   const text = failureText(err);
