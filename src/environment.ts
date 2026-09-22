@@ -164,7 +164,7 @@ export function computeDelta(capture: CaptureResult, opts: DeltaOptions = {}): E
   return delta;
 }
 
-export function describeDelta(delta: EnvDelta): string {
+function describeDelta(delta: EnvDelta): string {
   return `${delta.replace.size} set, ${delta.prepend.size} prepended, ${delta.dropped.length} filtered`;
 }
 

@@ -17,8 +17,11 @@ import {
   decodeAuthority,
   storageKeyFor,
 } from "./authority";
-import { extensionsDirFor, installedIn } from "./extensions";
-import { machineSettingsPath, parseJsonc } from "./settings";
+import { extensionsDirFor, installedIn } from "../provision/extensions";
+import {
+  machineSettingsPath,
+  readMachineSettings,
+} from "../provision/settings";
 import { ServerManager } from "./server";
 import { reopenFolderLocally } from "./recover";
 import { pickDevShell } from "../ui";
@@ -140,11 +143,10 @@ export async function showRemoteExtensions(
 
   // The devShell's settings live in the server's machine settings file, which is the same
   // "this devShell only" story as the extension directory above.
-  const settingsFile = machineSettingsPath(path.join(root, "data", key));
-  const settingsKeys = await fsp
-    .readFile(settingsFile, "utf8")
-    .then((text) => Object.keys(parseJsonc(text)).sort())
-    .catch(() => [] as string[]);
+  const serverDataDir = path.join(root, "data", key);
+  const settingsFile = machineSettingsPath(serverDataDir);
+  const settings = await readMachineSettings(serverDataDir);
+  const settingsKeys = Object.keys(settings ?? {}).sort();
 
   const remoteKind = vscode.extensions.all
     .filter((e) => !e.id.startsWith("vscode."))
@@ -170,7 +172,11 @@ export async function showRemoteExtensions(
     "",
     `## Settings applied to this devShell`,
     `  ${settingsFile}`,
-    ...(settingsKeys.length ? settingsKeys.map((k) => `  ${k}`) : ["  (none)"]),
+    ...(settings === undefined
+      ? ["  (unreadable)"]
+      : settingsKeys.length
+        ? settingsKeys.map((k) => `  ${k}`)
+        : ["  (none)"]),
     "  reading 'vscodeSettings' from the devShell",
     "",
     `## Where extensions are running in this window`,

@@ -16,16 +16,10 @@ import {
 import { offerLocalRecovery } from "./recover";
 import { decodeAuthority, storageKeyFor, type RemoteTarget } from "./authority";
 import {
-  collectExtensions,
-  ensureInstalled,
   extensionsDirFor,
-  resolveNixExtensions,
-  syncNixExtensions,
-} from "./extensions";
-import {
-  applyMachineSettings,
-  collectSettings,
-} from "./settings";
+  installDeclaredExtensions,
+} from "../provision/extensions";
+import { applyDeclaredSettings } from "../provision/settings";
 import { ServerManager } from "./server";
 import { patchServerNode as patchServerLd } from "./server-ld-patch";
 
@@ -229,16 +223,16 @@ export class NixDevShellResolver implements vscode.RemoteAuthorityResolver {
       build,
     });
 
-    await this.installDeclaredExtensions({
+    await installDeclaredExtensions({
       launcher,
       extensionsDir,
       serverDataDir,
+      flakeDir: target.flakeDir,
       capture,
-      target,
       progress,
     });
 
-    await this.applyDeclaredSettings({
+    await applyDeclaredSettings({
       serverDataDir,
       devShellEnv: capture?.inside ?? {},
     });
@@ -319,81 +313,5 @@ export class NixDevShellResolver implements vscode.RemoteAuthorityResolver {
       return undefined;
     }
   }
-
-  /**
-   * Resolve the devShell's declared extensions and install the missing ones.
-   */
-  private async installDeclaredExtensions(opts: {
-    launcher: string;
-    extensionsDir: string;
-    serverDataDir: string;
-    capture: CaptureResult | undefined;
-    target: RemoteTarget;
-    progress: (m: string) => void;
-  }): Promise<void> {
-    const declared = collectExtensions(opts.capture?.inside ?? {});
-
-    // Extensions the devShell supplies as Nix packages are already built: they only need
-    // linking into the extension directory, with no download and no version drift.
-    if (opts.capture) {
-      const nixExtensions = await resolveNixExtensions(declared.paths);
-      if (nixExtensions.length > 0) {
-        opts.progress(
-          `Linking ${nixExtensions.length} Nix-built extension(s)\u2026`,
-        );
-        log.info(
-          `devShell supplies via Nix: ${nixExtensions.map((e) => e.id).join(", ")}`,
-        );
-      }
-      // Runs even when the set is empty: that is what unlinks what the flake dropped.
-      await syncNixExtensions(opts.extensionsDir, nixExtensions).catch((err) =>
-        log.warn(
-          `could not link Nix-built extensions: ${(err as Error).message}`,
-        ),
-      );
-    }
-
-    const wanted = declared.ids;
-    if (wanted.length === 0) return;
-
-    log.info(`devShell extensions -- from flake: [${wanted.join(", ")}]`);
-
-    const { failed } = await ensureInstalled({
-      launcher: opts.launcher,
-      extensionsDir: opts.extensionsDir,
-      serverDataDir: opts.serverDataDir,
-      flakeDir: opts.target.flakeDir,
-      wanted,
-      progress: opts.progress,
-    });
-    if (failed.length > 0) {
-      void vscode.window.showWarningMessage(
-        `Could not install into the devShell: ${failed.join(", ")}. See the Nix DevShell log.`,
-      );
-    }
-  }
-
-  /**
-   * Write the devShell's declared editor settings into the server's machine settings.
-   *
-   * This runs before the server starts, so the extension host reads them on its first pass
-   * rather than reloading a moment later. As with extensions, a failure here is logged and
-   * the window still opens: a bad `vscodeSettings` attribute should cost the settings, not
-   * the devShell.
-   */
-  private async applyDeclaredSettings(opts: {
-    serverDataDir: string;
-    devShellEnv: Record<string, string>;
-  }): Promise<void> {
-    const values = collectSettings(opts.devShellEnv);
-    const keys = Object.keys(values);
-    if (keys.length > 0) {
-      log.info(`devShell settings -- from flake: [${keys.join(", ")}]`);
-    }
-    await applyMachineSettings(opts.serverDataDir, values).catch((err) =>
-      log.warn(
-        `could not apply the devShell's settings: ${(err as Error).message}`,
-      ),
-    );
-  }
 }
+

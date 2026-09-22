@@ -61,7 +61,7 @@ export class DevShellSession implements vscode.Disposable {
     return readConfig(this.folder);
   }
 
-  dir(): string {
+  private dir(): string {
     return flakeDir(this.folder, this.cfg());
   }
 

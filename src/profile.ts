@@ -17,7 +17,7 @@ import type { NixDevShellConfig } from "./config";
 export type ProfileMode = NixDevShellConfig["profile"];
 
 /** Everything this extension writes into a project lives here. */
-export const PROFILE_DIR = path.join(".vscode", "nix-devshell");
+const PROFILE_DIR = path.join(".vscode", "nix-devshell");
 
 /**
  * Store paths, one machine's Nix store, rebuilt on demand: nothing here belongs in a

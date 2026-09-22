@@ -8,7 +8,7 @@ import {
   machineSettingsPath,
   parseFlakeSettings,
   parseJsonc,
-} from "../src/remote/settings";
+} from "../src/provision/settings";
 
 /**
  * Settings a devShell declares for the editor.

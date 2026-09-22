@@ -2,8 +2,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { resolveNixExtensions, syncNixExtensions } from "../src/remote/extensions";
-import { manifestPath } from "../src/remote/extensions-manifest";
+import { resolveNixExtensions, syncNixExtensions } from "../src/provision/extensions";
+import { manifestPath } from "../src/provision/extensions-manifest";
 
 /** A stand-in for the `$out` of an extension package, as either source builds it. */
 async function pkg(root: string, name: string, ids: string[], version = "1.0.0"): Promise<string> {

@@ -24,7 +24,7 @@ const FEATURE_ARGS = ["--extra-experimental-features", "nix-command flakes"];
  * too, but its output is parsed for a listening port, and a progress bar redrawing into
  * that stream could interleave with the line being matched.
  */
-export const BUILD_LOG_FORMAT = "bar-with-logs";
+const BUILD_LOG_FORMAT = "bar-with-logs";
 
 /**
  * Dumps every exported variable NUL-delimited into the file named by $0.

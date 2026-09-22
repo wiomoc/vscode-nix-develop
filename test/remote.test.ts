@@ -12,7 +12,7 @@ import {
   collectExtensions,
   extensionsDirFor,
   installedIn,
-} from "../src/remote/extensions";
+} from "../src/provision/extensions";
 import { serverPlatform } from "../src/remote/server";
 import { glibcLinkerName } from "../src/remote/server-ld-patch";
 import { registerResourceLabelFormatter } from "../src/ui";

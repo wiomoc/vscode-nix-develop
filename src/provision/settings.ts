@@ -34,7 +34,7 @@ import { log } from "../utils/log";
  * the editor at its toolchain without the repository having to carry machine-specific
  * paths, and without anything being written into the workspace.
  */
-export const FLAKE_SETTINGS_VARS = ["vscodeSettings", "VSCODE_SETTINGS"];
+const FLAKE_SETTINGS_VARS = ["vscodeSettings", "VSCODE_SETTINGS"];
 
 /**
  * A settings key: dotted (`nix.serverPath`) or a language override (`[nix]`).
@@ -199,6 +199,26 @@ export function parseJsonc(text: string): SettingsMap {
 }
 
 /**
+ * The settings currently in this devShell's machine settings file.
+ *
+ * `undefined` is not the same answer as `{}`: a file that is there but cannot be read has
+ * contents we are simply blind to, and a caller about to rewrite it must not mistake that
+ * for an empty file. A missing file is the ordinary first-run case and reads as empty.
+ */
+export async function readMachineSettings(
+  serverDataDir: string,
+): Promise<SettingsMap | undefined> {
+  const file = machineSettingsPath(serverDataDir);
+  try {
+    return parseJsonc(await fs.readFile(file, "utf8"));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
+    log.warn(`devShell settings at ${file} are unreadable (${(err as Error).message})`);
+    return undefined;
+  }
+}
+
+/**
  * Put the declared settings into this devShell's machine settings file.
  *
  * Only the keys we declared are ours. Everything else in the file was put there by the
@@ -217,16 +237,12 @@ export async function applyMachineSettings(
   const file = machineSettingsPath(serverDataDir);
   const marker = managedPath(serverDataDir);
 
-  let existing: SettingsMap = {};
-  try {
-    existing = parseJsonc(await fs.readFile(file, "utf8"));
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      // Rewriting a file we could not read would discard settings the user can see in the
-      // UI, which is worse than the devShell's settings not being applied.
-      log.warn(`not applying devShell settings: ${file} is unreadable (${(err as Error).message})`);
-      return { written: [], removed: [] };
-    }
+  const existing = await readMachineSettings(serverDataDir);
+  if (existing === undefined) {
+    // Rewriting a file we could not read would discard settings the user can see in the
+    // UI, which is worse than the devShell's settings not being applied.
+    log.warn(`not applying devShell settings: ${file} is unreadable`);
+    return { written: [], removed: [] };
   }
 
   let managed: string[] = [];
@@ -268,4 +284,28 @@ export async function applyMachineSettings(
   else await fs.rm(marker, { force: true });
 
   return { written, removed };
+}
+
+/**
+ * Write the devShell's declared editor settings into the server's machine settings.
+ *
+ * This runs before the server starts, so the extension host reads them on its first pass
+ * rather than reloading a moment later. As with extensions, a failure here is logged and
+ * the window still opens: a bad `vscodeSettings` attribute should cost the settings, not
+ * the devShell.
+ */
+export async function applyDeclaredSettings(opts: {
+  serverDataDir: string;
+  devShellEnv: Record<string, string>;
+}): Promise<void> {
+  const values = collectSettings(opts.devShellEnv);
+  const keys = Object.keys(values);
+  if (keys.length > 0) {
+    log.info(`devShell settings -- from flake: [${keys.join(", ")}]`);
+  }
+  await applyMachineSettings(opts.serverDataDir, values).catch((err) =>
+    log.warn(
+      `could not apply the devShell's settings: ${(err as Error).message}`,
+    ),
+  );
 }

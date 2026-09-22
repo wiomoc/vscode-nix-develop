@@ -1,5 +1,7 @@
 import * as fsPromises from "node:fs/promises";
 import * as path from "node:path";
+import * as vscode from "vscode";
+import type { CaptureResult } from "../nix";
 import { log } from "../utils/log";
 import { exists, isDirectory } from "../utils/fs-stat";
 import { run } from "../utils/run-subprocess";
@@ -30,7 +32,7 @@ import { syncManifest } from "./extensions-manifest";
  * downloaded. The toolchain and the editor support for it are then declared and versioned
  * in the same expression, which is the whole point of putting the shell in the flake.
  */
-export const FLAKE_EXTENSION_VARS = ["vscodeExtensions", "VSCODE_EXTENSIONS"];
+const FLAKE_EXTENSION_VARS = ["vscodeExtensions", "VSCODE_EXTENSIONS"];
 
 const EXTENSION_ID =
   /^[A-Za-z0-9][A-Za-z0-9_-]*\.[A-Za-z0-9][A-Za-z0-9_-]*(@[\w.^-]+)?$/;
@@ -293,4 +295,55 @@ export async function syncNixExtensions(
   await syncManifest(extensionsDir, present, removed);
 
   return { linked, removed };
+}
+
+/**
+ * Resolve the devShell's declared extensions and install the missing ones.
+ */
+export async function installDeclaredExtensions(opts: {
+  launcher: string;
+  extensionsDir: string;
+  serverDataDir: string;
+  flakeDir: string;
+  capture: CaptureResult | undefined;
+  progress: (m: string) => void;
+}): Promise<void> {
+  const declared = collectExtensions(opts.capture?.inside ?? {});
+
+  // Extensions the devShell supplies as Nix packages are already built: they only need
+  // linking into the extension directory, with no download and no version drift.
+  if (opts.capture) {
+    const nixExtensions = await resolveNixExtensions(declared.paths);
+    if (nixExtensions.length > 0) {
+      opts.progress(
+        `Linking ${nixExtensions.length} Nix-built extension(s)\u2026`,
+      );
+      log.info(
+        `devShell supplies via Nix: ${nixExtensions.map((e) => e.id).join(", ")}`,
+      );
+    }
+    // Runs even when the set is empty: that is what unlinks what the flake dropped.
+    await syncNixExtensions(opts.extensionsDir, nixExtensions).catch((err) =>
+      log.warn(`could not link Nix-built extensions: ${(err as Error).message}`),
+    );
+  }
+
+  const wanted = declared.ids;
+  if (wanted.length === 0) return;
+
+  log.info(`devShell extensions -- from flake: [${wanted.join(", ")}]`);
+
+  const { failed } = await ensureInstalled({
+    launcher: opts.launcher,
+    extensionsDir: opts.extensionsDir,
+    serverDataDir: opts.serverDataDir,
+    flakeDir: opts.flakeDir,
+    wanted,
+    progress: opts.progress,
+  });
+  if (failed.length > 0) {
+    void vscode.window.showWarningMessage(
+      `Could not install into the devShell: ${failed.join(", ")}. See the Nix DevShell log.`,
+    );
+  }
 }

@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { NixDevShellConfig } from "../src/config";
-import { ensureInstalled, installedIn } from "../src/remote/extensions";
+import { ensureInstalled, installedIn } from "../src/provision/extensions";
 import { run as exec } from "../src/utils/run-subprocess";
 import { isPortOpen, ServerManager } from "../src/remote/server";
 import { patchServerNode } from "../src/remote/server-ld-patch";
