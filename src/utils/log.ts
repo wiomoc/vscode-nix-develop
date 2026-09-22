@@ -3,7 +3,7 @@ import * as vscode from "vscode";
 let channel: vscode.LogOutputChannel | undefined;
 
 export function initLog(): vscode.LogOutputChannel {
-  channel ??= vscode.window.createOutputChannel("Nix Develop", { log: true });
+  channel ??= vscode.window.createOutputChannel("Nix DevShell", { log: true });
   return channel;
 }
 

@@ -3,10 +3,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as net from "node:net";
 import { afterAll, describe, expect, it } from "vitest";
-import type { NixDevelopConfig } from "../src/config";
+import type { NixDevShellConfig } from "../src/config";
 import { ServerManager } from "../src/remote/server";
 
-const cfg: NixDevelopConfig = {
+const cfg: NixDevShellConfig = {
   flakeDirectory: ".",
   promptWhenUnset: true,
   impure: false,
@@ -42,7 +42,7 @@ const lockPath = (key: string) =>
 
 /** The symlinks `nix develop --profile` leaves behind, where the project keeps them. */
 const buildProfile = async (key: string): Promise<string> => {
-  const dir = path.join(storage, "project", ".vscode", "nix-develop", key);
+  const dir = path.join(storage, "project", ".vscode", "nix-devshell", key);
   await fs.mkdir(dir, { recursive: true });
   const profile = path.join(dir, "devshell");
   await fs.symlink("/nix/store/aaaa-devshell", `${profile}-1-link`);
@@ -101,7 +101,7 @@ describe("server lock release", () => {
   it("a released lock leaves the devShell's GC root alone", async () => {
     // The profile outlives every server that enters it: that is what makes reopening the
     // folder after a `nix store gc` -- or offline -- cost nothing.
-    const profile = path.join(storage, "project", ".vscode", "nix-develop", "gone", "devshell");
+    const profile = path.join(storage, "project", ".vscode", "nix-devshell", "gone", "devshell");
     expect(await exists(profile), "the profile symlink should still be there").toBe(true);
     expect(await exists(`${profile}-1-link`), "generation 1 should still be there").toBe(true);
     expect(await exists(`${profile}-2-link`), "generation 2 should still be there").toBe(true);
@@ -167,7 +167,7 @@ describe("server lock release", () => {
 
   it("a sweep leaves the devShell GC roots alone", async () => {
     // The profile belongs to the project, and no server's departure releases it.
-    const profile = path.join(storage, "project", ".vscode", "nix-develop", "gone", "devshell");
+    const profile = path.join(storage, "project", ".vscode", "nix-devshell", "gone", "devshell");
     await manager.sweep();
     expect(await exists(profile), "the project's profile is not the sweep's to remove").toBe(true);
   });

@@ -2,22 +2,22 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { log } from "./utils/log";
-import type { NixDevelopConfig } from "./config";
+import type { NixDevShellConfig } from "./config";
 
 /**
  * What roots a devShell against `nix store gc`.
  *
- * `persistent` writes a Nix profile next to the project, under `.vscode/nix-develop/`, and
+ * `persistent` writes a Nix profile next to the project, under `.vscode/nix-devshell/`, and
  * leaves it there. `none` passes no `--profile` at all, which leaves the shell's store
  * paths unrooted: on Linux, Nix's GC still scans `/proc` for paths a live process
  * references, so a *running* server is largely covered, but nothing protects the shell
  * between the environment capture and the server start, nothing survives the server's
  * exit, and a GC that starts before the server appears does not see it at all.
  */
-export type ProfileMode = NixDevelopConfig["profile"];
+export type ProfileMode = NixDevShellConfig["profile"];
 
 /** Everything this extension writes into a project lives here. */
-export const PROFILE_DIR = path.join(".vscode", "nix-develop");
+export const PROFILE_DIR = path.join(".vscode", "nix-devshell");
 
 /**
  * Store paths, one machine's Nix store, rebuilt on demand: nothing here belongs in a
@@ -25,7 +25,7 @@ export const PROFILE_DIR = path.join(".vscode", "nix-develop");
  * entirely rather than leaving the ignore rule itself to be committed.
  */
 const GITIGNORE = [
-  "# Nix GC roots for the devShells opened by the nix-develop extension.",
+  "# Nix GC roots for the devShells opened by the nix-devshell extension.",
   "# Machine-specific store paths, recreated on demand -- never committed.",
   "*",
   "",
@@ -71,7 +71,7 @@ export function profileDirName(devShell: string): string {
  * anyway -- which is `none`, the mode they could have chosen.
  */
 export async function ensureProfile(
-  cfg: NixDevelopConfig,
+  cfg: NixDevShellConfig,
   folder: string,
   devShell: string,
 ): Promise<string | undefined> {

@@ -1,5 +1,5 @@
 {
-  description = "Nix Develop - apply flake devShells to vscode";
+  description = "Nix DevShell - apply flake devShells to vscode";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -21,7 +21,7 @@
     }:
     let
       publisher = "wiomoc";
-      pname = "nix-develop";
+      pname = "nix-devshell";
       vscodeExtUniqueId = "${publisher}.${pname}";
       forAllSystems =
         let
@@ -88,7 +88,7 @@
 
               meta = {
                 description = "Apply flake devShells to vscode";
-                homepage = "https://github.com/wiomoc/vscode-nix-develop";
+                homepage = "https://github.com/wiomoc/vscode-nix-devshell";
                 license = [
                   pkgs.lib.licenses.mit
                 ];
@@ -98,7 +98,7 @@
             };
           devShells =
             let
-              NIX_DEVELOP_APP_ROOT =
+              NIX_DEVSHELL_APP_ROOT =
                 if pkgs.stdenv.hostPlatform.isDarwin then
                   "${pkgs.vscodium}/Applications/VSCodium.app/Contents/Resources/app"
                 else
@@ -106,7 +106,7 @@
             in
             {
               default = pkgs.mkShell {
-                name = "nix-develop-extension";
+                name = "nix-devshell-extension";
                 packages = with pkgs; [
                   bashInteractive
                   nodejs_22
@@ -115,7 +115,7 @@
                 EXTENSION_DEV = "1";
 
                 shellHook = ''
-                  echo "nix-develop extension dev shell -- npm install && npm run build"
+                  echo "nix-devshell extension devShell -- npm install && npm run build"
                 '';
               };
 
@@ -123,7 +123,7 @@
               #
               # The editor is here for `test/pty.test.ts`: this extension borrows the
               # editor's `node-pty` rather than depending on one, and that test only
-              # exercises the borrowing when `NIX_DEVELOP_APP_ROOT` points it at an
+              # exercises the borrowing when `NIX_DEVSHELL_APP_ROOT` points it at an
               # installed editor's `resources/app`. Without it the test skips.
               #
               # VSCodium rather than VS Code, for two reasons. It is free, so nothing
@@ -133,13 +133,13 @@
               # VSCodium is still on 1.126, which lays it out as plain files. The tests
               # run under plain node, so only the latter is loadable.
               ci = pkgs.mkShell {
-                name = "nix-develop-ci";
+                name = "nix-devshell-ci";
                 packages = [
                   pkgs.nodejs_22
                   pkgs.vscodium
                 ];
 
-                inherit NIX_DEVELOP_APP_ROOT;
+                inherit NIX_DEVSHELL_APP_ROOT;
               };
 
               # --------------------------------------------------------------------
@@ -148,7 +148,7 @@
               #
               # A `vscodeExtensions` list says which VS Code extensions belong to this
               # devShell. It is picked up when the folder is reopened with
-              # "Nix Develop: Reopen in devShell", and it is scoped to this devShell alone.
+              # "Nix DevShell: Reopen in devShell", and it is scoped to this devShell alone.
               #
               # Entries come in two forms, and may be mixed freely:
               #
@@ -168,7 +168,7 @@
               # `vscodeExtensions` is the only place this is read from: an extension package
               # in `packages` is on the shell's PATH like any other tool, and nothing else.
               editor = pkgs.mkShell {
-                name = "nix-develop-editor";
+                name = "nix-devshell-editor";
 
                 packages = with pkgs; [
                   bashInteractive
@@ -176,7 +176,7 @@
                   typescript-language-server
                 ];
 
-                inherit NIX_DEVELOP_APP_ROOT;
+                inherit NIX_DEVSHELL_APP_ROOT;
 
                 vscodeExtensions = [
                   # (1) built by Nix, pinned by flake.lock

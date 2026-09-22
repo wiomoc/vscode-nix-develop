@@ -1,4 +1,4 @@
-# VSCode Nix Develop
+# VSCode Nix DevShell
 
 Open a workspace that has a `flake.nix`, pick a devShell, and VS Code uses it — terminals,
 tasks, debuggers and language servers all get the toolchain `nix develop` would have given
@@ -31,22 +31,22 @@ it. The Nix route does both in one place.
 
 The flake exports `nixosModules.default`. It adds the extension to `programs.vscode` and
 replaces the editor package with one that launches as
-`--enable-proposed-api wiomoc.nix-develop`, so there is nothing left to switch on:
+`--enable-proposed-api wiomoc.nix-devshell`, so there is nothing left to switch on:
 
 ```nix
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    nix-develop.url = "github:wiomoc/vscode-nix-develop";
+    nix-devshell.url = "github:wiomoc/vscode-nix-devshell";
   };
 
   outputs =
-    { nixpkgs, nix-develop, ... }:
+    { nixpkgs, nix-devshell, ... }:
     {
       nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
         modules = [
-          nix-develop.nixosModules.default
+          nix-devshell.nixosModules.default
           { programs.vscode.enable = true; }
           ./configuration.nix
         ];
@@ -64,9 +64,9 @@ the proposed API enabled. The extension on its own is `packages.${system}.defaul
 
 ### From a `.vsix`
 
-1. Download `nix-develop-<version>.vsix` from
-   [Releases](https://github.com/wiomoc/vscode-nix-develop/releases).
-2. Install it, with `code --install-extension nix-develop-<version>.vsix` or from
+1. Download `nix-devshell-<version>.vsix` from
+   [Releases](https://github.com/wiomoc/vscode-nix-devshell/releases).
+2. Install it, with `code --install-extension nix-devshell-<version>.vsix` or from
    *Extensions → ⋯ → Install from VSIX…*.
 3. Allow the proposed API for good, by adding the extension id to `argv.json` —
    **Preferences: Configure Runtime Arguments** opens it, or edit `~/.vscode/argv.json`
@@ -74,7 +74,7 @@ the proposed API enabled. The extension on its own is `packages.${system}.defaul
 
    ```jsonc
    {
-     "enable-proposed-api": ["wiomoc.nix-develop"]
+     "enable-proposed-api": ["wiomoc.nix-devshell"]
    }
    ```
 
@@ -84,14 +84,14 @@ the proposed API enabled. The extension on its own is `packages.${system}.defaul
 
 | Command | Description |
 | --- | --- |
-| `Nix Develop: Reopen in devShell` | Reopen the folder with the extension host running inside the devShell |
-| `Nix Develop: Select devShell` | Switch the devShell a devShell window is running in; only offered inside one |
-| `Nix Develop: Reopen folder locally` | Leave a devShell window |
-| `Nix Develop: Show resolved environment` | Open the computed environment as a document |
-| `Nix Develop: Show devShell extensions (remote)` | What is installed in this devShell, and where each extension runs |
-| `Nix Develop: Restart devShell server` | Put the window back on a devShell built from the flake as it is now |
-| `Nix Develop: Stop devShell server` | Stop the server backing a devShell; run inside a devShell window, it leaves the folder in a local one |
-| `Nix Develop: Show log` | Open the output channel |
+| `Nix DevShell: Reopen in devShell` | Reopen the folder with the extension host running inside the devShell |
+| `Nix DevShell: Select devShell` | Switch the devShell a devShell window is running in; only offered inside one |
+| `Nix DevShell: Reopen folder locally` | Leave a devShell window |
+| `Nix DevShell: Show resolved environment` | Open the computed environment as a document |
+| `Nix DevShell: Show devShell extensions (remote)` | What is installed in this devShell, and where each extension runs |
+| `Nix DevShell: Restart devShell server` | Put the window back on a devShell built from the flake as it is now |
+| `Nix DevShell: Stop devShell server` | Stop the server backing a devShell; run inside a devShell window, it leaves the folder in a local one |
+| `Nix DevShell: Show log` | Open the output channel |
 
 The status bar shows the active devShell; click it to switch. In a local window it reads
 `devShell` with no name — a devShell is only ever active *inside* one of its windows — and
@@ -101,17 +101,17 @@ clicking it opens one, since that is what picking a devShell locally means.
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `nixDevelop.flakeDirectory` | `"."` | Where `flake.nix` lives, relative to the folder |
-| `nixDevelop.promptWhenUnset` | `true` | Offer the picker when a workspace with a `flake.nix` opens |
-| `nixDevelop.impure` | `false` | Pass `--impure` |
-| `nixDevelop.extraArgs` | `[]` | Extra arguments for `nix develop` |
-| `nixDevelop.nixPath` | `"nix"` | Path to the `nix` binary |
-| `nixDevelop.buildTimeoutSeconds` | `1800` | Abort a build after this long |
-| `nixDevelop.profile` | `"persistent"` | Keep a Nix GC root per devShell in `.vscode/nix-develop/`, or `"none"` to root nothing |
-| `nixDevelop.showBuildOutput` | `"always"` | Stream the devShell build into a terminal: `"always"`, `"onFailure"`, or `"never"` |
-| `nixDevelop.remote.connectTimeoutSeconds` | `180` | How long to wait for the server to listen |
-| `nixDevelop.remote.serverDownloadUrl` | `""` | Where to fetch the VS Code server; empty detects it from the editor's `product.json` |
-| `nixDevelop.remote.patchServerLd` | `true` | Point the server's bundled `node` at a glibc from nixpkgs with `patchelf` |
+| `nixDevShell.flakeDirectory` | `"."` | Where `flake.nix` lives, relative to the folder |
+| `nixDevShell.promptWhenUnset` | `true` | Offer the picker when a workspace with a `flake.nix` opens |
+| `nixDevShell.impure` | `false` | Pass `--impure` |
+| `nixDevShell.extraArgs` | `[]` | Extra arguments for `nix develop` |
+| `nixDevShell.nixPath` | `"nix"` | Path to the `nix` binary |
+| `nixDevShell.buildTimeoutSeconds` | `1800` | Abort a build after this long |
+| `nixDevShell.profile` | `"persistent"` | Keep a Nix GC root per devShell in `.vscode/nix-devshell/`, or `"none"` to root nothing |
+| `nixDevShell.showBuildOutput` | `"always"` | Stream the devShell build into a terminal: `"always"`, `"onFailure"`, or `"never"` |
+| `nixDevShell.remote.connectTimeoutSeconds` | `180` | How long to wait for the server to listen |
+| `nixDevShell.remote.serverDownloadUrl` | `""` | Where to fetch the VS Code server; empty detects it from the editor's `product.json` |
+| `nixDevShell.remote.patchServerLd` | `true` | Point the server's bundled `node` at a glibc from nixpkgs with `patchelf` |
 
 ## Per-devShell extensions
 
@@ -210,7 +210,7 @@ Three ways to get a devShell into VS Code:
 | **Runtime cost, N shells** | 🟡 One Node server per devShell in active use; an idle one exits five minutes after its last window disconnects. Single shared client. | 🟢 Nothing per shell. | 🔴 A full Electron instance per shell. |
 | **VS Code version** | 🟡 Your own install, unpinned — only the server is pinned to its commit. The server build is whichever your editor declares, so VSCodium works too (via its REH builds, with Open VSX for extensions). | 🔴 Your own install, unpinned. | 🟢 The editor binary comes from `flake.lock`, and two shells may sit on different versions. |
 | **Settings, keybindings, logins** | 🟢 One profile across local and devShell windows; sign in once. | 🟢 One profile. | 🔴 One profile per devShell: separate settings and credential store, every login repeated. |
-| **Setup and upkeep** | 🟡 Needs `--enable-proposed-api wiomoc.nix-develop` in `argv.json`, and proposed APIs can break between releases. Nothing added to the repository. | 🔴 direnv, nix-direnv, the extension, a committed `.envrc` and a `direnv allow` per clone — but that same `.envrc` also serves plain shells, other editors and CI. | 🔴 An editor build per devShell, a user data directory per devShell to name, gitignore and prune, and a launch line that must never be shortened: drop `--user-data-dir` once and the folder is handed to the running instance with the wrong shell and the wrong extensions, silently. |
+| **Setup and upkeep** | 🟡 Needs `--enable-proposed-api wiomoc.nix-devshell` in `argv.json`, and proposed APIs can break between releases. Nothing added to the repository. | 🔴 direnv, nix-direnv, the extension, a committed `.envrc` and a `direnv allow` per clone — but that same `.envrc` also serves plain shells, other editors and CI. | 🔴 An editor build per devShell, a user data directory per devShell to name, gitignore and prune, and a launch line that must never be shortened: drop `--user-data-dir` once and the folder is handed to the running instance with the wrong shell and the wrong extensions, silently. |
 
 ## Requirements
 
@@ -221,7 +221,7 @@ Three ways to get a devShell into VS Code:
 - The `resolvers` proposed API, which is what lets an extension resolve a remote authority:
 
   ```bash
-  code --enable-proposed-api wiomoc.nix-develop
+  code --enable-proposed-api wiomoc.nix-devshell
   ```
 
   Without it there is nothing to fall back to, and the extension says so rather than

@@ -1,11 +1,11 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { NixDevelopConfig } from "../src/config";
+import type { NixDevShellConfig } from "../src/config";
 import { ensureProfile, profileDirName, profileRoot } from "../src/profile";
 import { afterAll, describe, expect, it } from "vitest";
 
-const cfg = { profile: "persistent" } as NixDevelopConfig;
+const cfg = { profile: "persistent" } as NixDevShellConfig;
 
 const exists = (p: string) =>
   fs.stat(p).then(() => true).catch(() => false);
@@ -54,7 +54,7 @@ describe("devShell profiles", () => {
 
   it("persistent puts the profile beside the project, under .vscode", async () => {
     const profile = await ensureProfile(cfg, folder, "default");
-    expect(profile).toEqual(path.join(folder, ".vscode", "nix-develop", "default", "devshell"));
+    expect(profile).toEqual(path.join(folder, ".vscode", "nix-devshell", "default", "devshell"));
     expect(await exists(path.dirname(profile!)), "Nix will not create the directory itself").toBe(true);
   });
 

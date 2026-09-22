@@ -144,7 +144,7 @@ export function machineSettingsPath(serverDataDir: string): string {
 
 /** Keys written on the last run, so ones the flake has dropped can be removed again. */
 function managedPath(serverDataDir: string): string {
-  return path.join(serverDataDir, "data", "Machine", "nix-develop.managed.json");
+  return path.join(serverDataDir, "data", "Machine", "nix-devshell.managed.json");
 }
 
 /**

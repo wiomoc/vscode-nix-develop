@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { log } from "./utils/log";
-import type { NixDevelopConfig } from "./config";
+import type { NixDevShellConfig } from "./config";
 import { run, SubprocessError, type TtyOptions } from "./utils/run-subprocess";
 
 /** Flakes are still gated behind experimental features on many installs. */
@@ -58,7 +58,7 @@ const DUMP_SCRIPT = [
 
 
 export interface NixCommand {
-  /** The `nix` executable, from `nixDevelop.nixPath`. */
+  /** The `nix` executable, from `nixDevShell.nixPath`. */
   exe: string;
   args: string[];
 }
@@ -67,7 +67,7 @@ export interface NixCommand {
  * How this extension invokes Nix.
  *
  * Every `nix` spawn is assembled here, so the rules that apply to all of them -- flakes are
- * gated behind experimental features, and `nixDevelop.impure` is the user's answer to
+ * gated behind experimental features, and `nixDevShell.impure` is the user's answer to
  * whether evaluation may reach outside the store -- are stated exactly once. Callers that
  * cannot use `run` (the server manager needs a detached child) still take their argv from
  * here rather than hand-rolling it.
@@ -78,7 +78,7 @@ export interface NixCommand {
  * `--log-format` is top-level too, so it joins the features rather than the arguments.
  */
 export function nixCommand(
-  cfg: NixDevelopConfig,
+  cfg: NixDevShellConfig,
   subcommand: string[],
   args: string[],
   opts: { impure?: boolean; logFormat?: string } = {},
@@ -108,7 +108,7 @@ export interface DevelopOptions {
    * running server is not defenceless, but that covers neither the gap between building the
    * shell and starting the server nor a GC whose scan happened before the server appeared.
    *
-   * Whether to keep one is the user's call (`nixDevelop.profile`), so this is nullable --
+   * Whether to keep one is the user's call (`nixDevShell.profile`), so this is nullable --
    * but not optional. Making it part of the type means a caller has to say which it wants
    * rather than silently omitting the root; `ensureProfile` in `profile.ts` is what
    * answers the question.
@@ -133,7 +133,7 @@ export interface DevelopOptions {
  * here, and `nix develop` is spelled out in exactly this one place.
  */
 export async function developCommand(
-  cfg: NixDevelopConfig,
+  cfg: NixDevShellConfig,
   opts: DevelopOptions,
 ): Promise<NixCommand> {
   // Nix writes the profile symlinks itself, but will not create the directory holding them.
@@ -162,7 +162,7 @@ export async function developCommand(
 let systemDouble: string | undefined;
 
 export async function currentSystem(
-  cfg: NixDevelopConfig,
+  cfg: NixDevShellConfig,
   cwd: string,
   token?: vscode.CancellationToken,
 ): Promise<string> {
@@ -198,7 +198,7 @@ export interface DevShell {
  * cannot be evaluated on this system.
  */
 export async function listDevShells(
-  cfg: NixDevelopConfig,
+  cfg: NixDevShellConfig,
   dir: string,
   system: string,
   token?: vscode.CancellationToken,
@@ -229,7 +229,7 @@ interface FlakeShowNode {
 }
 
 async function listViaFlakeShow(
-  cfg: NixDevelopConfig,
+  cfg: NixDevShellConfig,
   dir: string,
   system: string,
   token?: vscode.CancellationToken,
@@ -433,14 +433,14 @@ export interface CaptureOptions {
  * would otherwise corrupt the payload. That is what makes streaming stdout safe here.
  */
 export async function captureEnv(
-  cfg: NixDevelopConfig,
+  cfg: NixDevShellConfig,
   installable: string,
   dir: string,
   profilePath: string | undefined,
   opts: CaptureOptions = {},
 ): Promise<CaptureResult> {
   const { token, onProgress, onOutput, tty } = opts;
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "vscode-nix-develop-"));
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "vscode-nix-devshell-"));
   const insideFile = path.join(tmp, "inside.env");
   const baselineFile = path.join(tmp, "baseline.env");
 

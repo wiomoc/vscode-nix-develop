@@ -4,12 +4,12 @@ import * as path from "node:path";
 import * as http from "node:http";
 import * as cp from "node:child_process";
 import { afterAll, describe, expect, it } from "vitest";
-import type { NixDevelopConfig } from "../src/config";
+import type { NixDevShellConfig } from "../src/config";
 import { ServerManager, serverPlatform } from "../src/remote/server";
 import { forgetProduct } from "../src/remote/product";
 import * as stub from "./activation-stub";
 
-const cfg: NixDevelopConfig = {
+const cfg: NixDevShellConfig = {
   flakeDirectory: ".",
   promptWhenUnset: true,
   impure: false,
@@ -80,7 +80,7 @@ forgetProduct();
 
 describe("server acquisition", () => {
   const storage = path.join(root, "storage");
-  const acquireCfg: NixDevelopConfig = {
+  const acquireCfg: NixDevShellConfig = {
     ...cfg,
     remote: {
       ...cfg.remote,

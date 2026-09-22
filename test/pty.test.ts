@@ -58,9 +58,9 @@ describe("borrowed pty", () => {
     await fs.rm(empty, { recursive: true, force: true });
   });
 
-  // The real thing, when there is a real editor to borrow from. `NIX_DEVELOP_APP_ROOT` is
+  // The real thing, when there is a real editor to borrow from. `NIX_DEVSHELL_APP_ROOT` is
   // an installed VS Code's `resources/app`; without it this one reports itself as skipped.
-  const real = process.env.NIX_DEVELOP_APP_ROOT;
+  const real = process.env.NIX_DEVSHELL_APP_ROOT;
   it.runIf(real !== undefined)("a real editor's node-pty loads and spawns", async () => {
     forgetPty();
     stub.env.appRoot = real;

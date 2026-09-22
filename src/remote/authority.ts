@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { decodeBase32, encodeBase32 } from "../utils/base32";
 
 /** The `authorityPrefix` passed to `registerRemoteAuthorityResolver`. */
-export const AUTHORITY_PREFIX = "nix-develop";
+export const AUTHORITY_PREFIX = "nix-devshell";
 
 export interface RemoteTarget {
   /** Absolute path of the folder to open in the remote window. */
@@ -23,7 +23,7 @@ export interface RemoteTarget {
 const SEP = "\u0000";
 
 /**
- * A remote authority is `nix-develop+<base32 payload>`, and the payload *is* the target.
+ * A remote authority is `nix-devshell+<base32 payload>`, and the payload *is* the target.
  *
  * The resolver runs in a different window from the one that created the authority and is
  * handed nothing but this string.

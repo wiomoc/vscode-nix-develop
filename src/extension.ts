@@ -12,7 +12,7 @@ import {
   AUTHORITY_PREFIX,
   inDevShellWindow,
   killServer,
-  NixDevelopResolver,
+  NixDevShellResolver,
   decodeAuthority,
   reopenInDevShell,
   reopenLocally,
@@ -92,7 +92,7 @@ export async function activate(
     // running in, and the authority registry is what says which flake and folder it came
     // from. Picking one from a local window means opening a window against it, which is
     // `Reopen in devShell` and nothing else.
-    vscode.commands.registerCommand("nixDevelop.selectDevShell", async () => {
+    vscode.commands.registerCommand("nixDevShell.selectDevShell", async () => {
       if (!inDevShellWindow()) {
         void vscode.window.showInformationMessage(
           "This window is not running inside a devShell — use “Reopen in devShell” to open one.",
@@ -102,7 +102,7 @@ export async function activate(
       await switchDevShellInRemoteWindow(context);
     }),
 
-    vscode.commands.registerCommand("nixDevelop.reopenInDevShell", async () => {
+    vscode.commands.registerCommand("nixDevShell.reopenInDevShell", async () => {
       const folder = await pickFolder("Reopen which folder in a devShell?");
       if (!folder) return;
 
@@ -110,7 +110,7 @@ export async function activate(
       if (!session?.hasFlake()) {
         // Previously this returned silently, leaving the command looking broken.
         void vscode.window.showWarningMessage(
-          `No flake.nix was found for ${folder.name}. Check nixDevelop.flakeDirectory.`,
+          `No flake.nix was found for ${folder.name}. Check nixDevShell.flakeDirectory.`,
         );
         return;
       }
@@ -123,7 +123,7 @@ export async function activate(
       );
     }),
 
-    vscode.commands.registerCommand("nixDevelop.showEnvironment", async () => {
+    vscode.commands.registerCommand("nixDevShell.showEnvironment", async () => {
       if (!inDevShellWindow()) {
         void vscode.window.showInformationMessage(
           "Reopen the folder in a devShell first — this window is not running inside one.",
@@ -133,21 +133,21 @@ export async function activate(
       await showRemoteEnvironment();
     }),
 
-    vscode.commands.registerCommand("nixDevelop.showLog", () => log.show()),
+    vscode.commands.registerCommand("nixDevShell.showLog", () => log.show()),
 
-    vscode.commands.registerCommand("nixDevelop.reopenLocally", () =>
+    vscode.commands.registerCommand("nixDevShell.reopenLocally", () =>
       reopenLocally(),
     ),
 
-    vscode.commands.registerCommand("nixDevelop.remoteExtensions", () =>
+    vscode.commands.registerCommand("nixDevShell.remoteExtensions", () =>
       showRemoteExtensions(context),
     ),
 
-    vscode.commands.registerCommand("nixDevelop.restartDevShell", () =>
+    vscode.commands.registerCommand("nixDevShell.restartDevShell", () =>
       restartDevShellWindow(context),
     ),
 
-    vscode.commands.registerCommand("nixDevelop.killServer", async () => {
+    vscode.commands.registerCommand("nixDevShell.killServer", async () => {
       const folder = vscode.workspace.workspaceFolders?.[0];
       await killServer(context, folder);
     }),
@@ -161,7 +161,7 @@ export async function activate(
   if (inDevShellWindow()) {
     const authority = vscode.env.remoteAuthority ?? "";
     log.info(`running inside devShell window (${authority})`);
-    // NIX_DEVELOP_SHELL is set on the *remote* extension host; this extension is a UI
+    // NIX_DEVSHELL_SHELL is set on the *remote* extension host; this extension is a UI
     // extension, so the name comes out of the authority itself.
     const target = decodeAuthority(authority);
     const active: StatusState = {
@@ -187,7 +187,7 @@ export async function activate(
   });
 
   // Fire-and-forget: this shows the status bar and may offer the picker, neither of which
-  // should hold up the rest of the window. `nixDevelop.promptWhenUnset` is what silences
+  // should hold up the rest of the window. `nixDevShell.promptWhenUnset` is what silences
   // the offer for a workspace that does not want it -- and so does a flake that has just
   // failed to evaluate, where offering to pick a devShell is offering the thing that broke.
   for (const session of sessions.values()) {
@@ -221,7 +221,7 @@ function registerResolver(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
       api.registerRemoteAuthorityResolver(
         AUTHORITY_PREFIX,
-        new NixDevelopResolver(context),
+        new NixDevShellResolver(context),
       ),
     );
     context.subscriptions.push(...registerResourceLabelFormatter(api));

@@ -1,8 +1,8 @@
 # Reopening a workspace inside a devShell
 
 This extension implements a **`RemoteAuthorityResolver`** — the same mechanism Dev
-Containers, Remote-SSH and WSL use. `Nix Develop: Reopen in devShell` reopens the folder on
-a `vscode-remote://nix-develop+<id>/…` authority, and the resolver starts a VS Code
+Containers, Remote-SSH and WSL use. `Nix DevShell: Reopen in devShell` reopens the folder on
+a `vscode-remote://nix-devshell+<id>/…` authority, and the resolver starts a VS Code
 **server** inside `nix develop`. The remote extension host, its terminals, tasks, debuggers
 and language servers are all children of that server, so they are inside the devShell for
 real rather than approximated by patching environment variables.
@@ -18,7 +18,7 @@ For the same flow as a diagram, see
 allowlisted at launch:
 
 ```bash
-code --enable-proposed-api wiomoc.nix-develop
+code --enable-proposed-api wiomoc.nix-devshell
 ```
 
 Make it permanent by adding the extension id to `argv.json`
@@ -26,7 +26,7 @@ Make it permanent by adding the extension id to `argv.json`
 
 ```jsonc
 {
-  "enable-proposed-api": ["wiomoc.nix-develop"]
+  "enable-proposed-api": ["wiomoc.nix-devshell"]
 }
 ```
 
@@ -41,7 +41,7 @@ Proposed APIs carry no compatibility guarantee and can change between VS Code re
 ## What happens on reopen
 
 1. The command encodes `{ folder, flakeDir, devShell }` into the authority itself and calls
-   `vscode.openFolder` on `vscode-remote://nix-develop+<payload>/<path>`. The resolver runs
+   `vscode.openFolder` on `vscode-remote://nix-devshell+<payload>/<path>`. The resolver runs
    in a **different window** and is handed nothing but that string, so the authority *is*
    the mapping — there is no side table to consult or to lose.
 2. VS Code opens the new window and calls `resolve()`.
@@ -101,7 +101,7 @@ products this extension knows about.
 VSCodium publishes a REH (remote extension host) build per release and points at it from
 `product.json`, fully resolved down to the release tag, so it needs no configuration. A
 Microsoft build declares no template -- the URL lives in its CLI, not its `product.json` --
-so `update.code.visualstudio.com` stands in. `nixDevelop.remote.serverDownloadUrl` overrides
+so `update.code.visualstudio.com` stands in. `nixDevShell.remote.serverDownloadUrl` overrides
 both when set.
 
 The archive layout is not declared anywhere, so it is detected rather than configured: the
@@ -121,7 +121,7 @@ It does not outlive its usefulness, though. It is started with `--enable-remote-
 so five minutes after its last extension host disconnects it exits by itself; an extension
 host that reconnects inside that window cancels the shutdown, which is what makes reloads,
 restarts and reopens land on the same server. The same timer starts when the server boots,
-so one that is started and then never connected to is collected too. `Nix Develop: Stop
+so one that is started and then never connected to is collected too. `Nix DevShell: Stop
 devShell server` ends one immediately.
 
 Nothing of ours runs inside the devShell alongside the server. `nix develop --command`
@@ -142,10 +142,10 @@ is the extension's job, in three places, all idempotent:
   that server was backing, this also puts the folder back in a local window: the server was
   that window's extension host and file system, so there is nothing left for it to show.
 
-None of them touch the devShell's GC root: a profile under `.vscode/nix-develop/` belongs
+None of them touch the devShell's GC root: a profile under `.vscode/nix-devshell/` belongs
 to the project and outlives every server that enters it.
 
-`getCanonicalURI` maps `vscode-remote://nix-develop+…/x` back to `file:///x`. A devShell
+`getCanonicalURI` maps `vscode-remote://nix-devshell+…/x` back to `file:///x`. A devShell
 shares the machine's filesystem, so without it VS Code would treat the same file opened
 locally and remotely as two different resources.
 
@@ -265,7 +265,7 @@ Extensions that declare both prefer `ui`. Override per extension with the standa
 { "remote.extensionKind": { "some.extension": ["workspace"] } }
 ```
 
-`Nix Develop: Show devShell extensions (remote)` prints the server's extensions directory,
+`Nix DevShell: Show devShell extensions (remote)` prints the server's extensions directory,
 what is installed in it, what each source declared, and where every loaded extension is
 currently running.
 
@@ -334,18 +334,18 @@ rewritten when the effective settings change, so hand-written comments survive.
 Keys that do not look like settings keys are refused with a warning, and a malformed
 `vscodeSettings` costs the settings, not the window.
 
-`Nix Develop: Show devShell extensions (remote)` lists the machine settings file and the
+`Nix DevShell: Show devShell extensions (remote)` lists the machine settings file and the
 keys currently in it, alongside the extensions.
 
 ## Window labelling
 
-Two `ResourceLabelFormatter`s are registered: a `nix-develop+*` fallback, and -- in a devShell
+Two `ResourceLabelFormatter`s are registered: a `nix-devshell+*` fallback, and -- in a devShell
 window -- one bound to that window's exact authority which names the shell, so the title reads
 `my-project [devShell: ci]`. `default` is left unnamed (`[devShell]`), since it is what a bare
 `nix develop` picks.
 
 The exact-authority formatter wins because `findFormatting` prefers the longest matching
-authority pattern, and a full authority is far longer than `nix-develop+*`.
+authority pattern, and a full authority is far longer than `nix-devshell+*`.
 
 ## The server's bundled `node`
 
@@ -354,7 +354,7 @@ so it cannot start unless `programs.nix-ld` is enabled.
 
 The fix is `patchelf` and a glibc from nixpkgs, and `ServerManager.patchServerNode` runs it
 from the extension before anything runs the launcher.
-`nixDevelop.remote.patchServerLd` (default `true`) is the only switch: turned off, neither
+`nixDevShell.remote.patchServerLd` (default `true`) is the only switch: turned off, neither
 the binary nor the environment is touched and no nixpkgs attribute is evaluated at all --
 the only way this costs nothing on a cold store. That is for a host where the bundled `node`
 already runs: `programs.nix-ld` enabled, or simply not NixOS.
@@ -452,7 +452,7 @@ macOS is not supported here: `nixpkgs#glibc` does not build on darwin at all.
   `Stop devShell server`, then reopen. That applies to `vscodeSettings` too: they are
   written just before a server starts.
 - The devShell is built when the server starts. A cold build shows progress in the
-  resolving notification and is bounded by `nixDevelop.remote.connectTimeoutSeconds`.
+  resolving notification and is bounded by `nixDevShell.remote.connectTimeoutSeconds`.
 
 ## If you cannot use proposed API
 

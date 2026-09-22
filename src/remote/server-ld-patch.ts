@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import { exists } from "../utils/fs-stat";
 import { log } from "../utils/log";
 import { nixCommand } from "../nix";
-import { NixDevelopConfig } from "../config";
+import { NixDevShellConfig } from "../config";
 import { run } from "../utils/run-subprocess";
 
 /** What `patchServerNode` did about the server's `node`. */
@@ -68,13 +68,13 @@ export function glibcLinkerName(arch: string = process.arch): string {
  * the same two `patchelf` calls from here avoids both: no variable reaches the server,
  * and the rewrite goes through a copy that is renamed into place.
  *
- * `nixDevelop.remote.patchServerLd` turned off touches neither the binary nor the
+ * `nixDevShell.remote.patchServerLd` turned off touches neither the binary nor the
  * environment, for a host that resolves `/lib64/ld-linux-*` on its own --
  * `programs.nix-ld`, or simply not NixOS. No nixpkgs build is evaluated at all, which is
  * the only way this costs nothing on a cold store.
  */
 export async function patchServerNode(
-  cfg: NixDevelopConfig,
+  cfg: NixDevShellConfig,
   launcher: string,
   dir: string,
 ): Promise<PatchedNode> {
@@ -144,7 +144,7 @@ export async function patchServerNode(
   // `open: Text file busy`, which is how this node came to be unpatched in the first
   // place. A rename only swaps the directory entry, so the running servers keep the
   // inode they started on and the next one gets the patched binary.
-  const tmp = `${node}.nix-develop-${process.pid}`;
+  const tmp = `${node}.nix-devshell-${process.pid}`;
   try {
     await fs.copyFile(node, tmp);
     // Whether copyFile carries the mode over is platform-dependent, and a `node` that is
@@ -171,11 +171,11 @@ export async function patchServerNode(
 }
 
 async function storePathOf(
-  cfg: NixDevelopConfig,
+  cfg: NixDevShellConfig,
   installable: string,
   cwd: string,
 ): Promise<string> {
-  // `nixDevelop.impure` is the user's answer for *their* devShell; these are fixed
+  // `nixDevShell.impure` is the user's answer for *their* devShell; these are fixed
   // nixpkgs references that have no business being evaluated impurely.
   const { exe, args } = nixCommand(
     cfg,

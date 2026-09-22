@@ -73,15 +73,15 @@ describe("remote authorities", () => {
 
   it("rejects anything that is not one of ours", () => {
     // The previous scheme's opaque digest decodes as base64 but means nothing.
-    expect(decodeAuthority("nix-develop+44f5ce469662698e"), "an old digest").toEqual(undefined);
-    expect(decodeAuthority("nix-develop+"), "an empty payload").toEqual(undefined);
-    expect(decodeAuthority("nix-develop+not/base64url"), "illegal characters").toEqual(undefined);
+    expect(decodeAuthority("nix-devshell+44f5ce469662698e"), "an old digest").toEqual(undefined);
+    expect(decodeAuthority("nix-devshell+"), "an empty payload").toEqual(undefined);
+    expect(decodeAuthority("nix-devshell+not/base64url"), "illegal characters").toEqual(undefined);
     expect(
-      decodeAuthority("nix-develop+" + Buffer.from("relative/path\u0000dev").toString("base64url")),
+      decodeAuthority("nix-devshell+" + Buffer.from("relative/path\u0000dev").toString("base64url")),
       "a folder that is not absolute",
     ).toEqual(undefined);
     expect(
-      decodeAuthority("nix-develop+" + Buffer.from("/w/proj").toString("base64url")),
+      decodeAuthority("nix-devshell+" + Buffer.from("/w/proj").toString("base64url")),
       "a payload with no devShell",
     ).toEqual(undefined);
   });
@@ -157,7 +157,7 @@ describe("workspace label", () => {
     // A local window has no devShell to name, and so nothing to outrank the wildcard.
     const formatters = formattersIn(undefined);
     expect(formatters.length, "a local window should get one formatter").toEqual(1);
-    expect(formatters[0].authority).toEqual("nix-develop+*");
+    expect(formatters[0].authority).toEqual("nix-devshell+*");
   });
 });
 
@@ -312,7 +312,7 @@ describe("reopening without the proposed API", () => {
     await reopenInDevShell(folder as never, "default", "/w/proj");
 
     const warning = stub.recorded.warningMessages[0];
-    expect(warning?.message).toContain('"enable-proposed-api": ["wiomoc.nix-develop"]');
+    expect(warning?.message).toContain('"enable-proposed-api": ["wiomoc.nix-devshell"]');
     expect(warning?.message, "argv.json is only read at launch").toContain("restart");
     expect(
       stub.recorded.executed.includes("vscode.openFolder"),

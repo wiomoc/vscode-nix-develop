@@ -1,7 +1,7 @@
 # Class structure
 
 The extension is mostly modules of functions; only four types are stateful enough to be
-classes (`DevShellSession`, `StatusBar`, `ServerManager`, `NixDevelopResolver`). The
+classes (`DevShellSession`, `StatusBar`, `ServerManager`, `NixDevShellResolver`). The
 diagram shows every exported type, with modules that are pure function sets drawn as
 `<<module>>` so the boundaries of the real design stay visible.
 
@@ -18,13 +18,13 @@ classDiagram
     class config {
         <<module>>
         +SECTION: string
-        +readConfig(scope) NixDevelopConfig
+        +readConfig(scope) NixDevShellConfig
         +flakeDir(folder, cfg) string
         +setResolverAvailable(value)
         +isResolverAvailable() boolean
     }
 
-    class NixDevelopConfig {
+    class NixDevShellConfig {
         <<interface>>
         +flakeDirectory: string
         +promptWhenUnset: boolean
@@ -259,7 +259,7 @@ classDiagram
 
     class ServerManager {
         -globalStorage: Uri
-        -cfg: NixDevelopConfig
+        -cfg: NixDevShellConfig
         -productOnce?: Promise~ClientProduct~
         +ensureServer(commit, progress) string
         +patchServerNode(launcher, dir) PatchedNode
@@ -343,7 +343,7 @@ classDiagram
 
     %% -------------------------------------------------------------- resolver
 
-    class NixDevelopResolver {
+    class NixDevShellResolver {
         -context: ExtensionContext
         +resolve(authority, context) ResolverResult
         +getCanonicalURI(uri) Uri
@@ -408,9 +408,9 @@ classDiagram
 
     %% --------------------------------------------------------- compositions
 
-    NixDevelopConfig *-- RemoteConfig
+    NixDevShellConfig *-- RemoteConfig
     DirenvState <.. direnv : returns
-    NixDevelopConfig <.. config : returns
+    NixDevShellConfig <.. config : returns
 
     nix ..> NixCommand : builds
     nix ..> DevelopOptions : takes
@@ -418,7 +418,7 @@ classDiagram
     nix ..> DevShell : returns
     nix ..> NixError : throws
     nix ..> NixErrorLocation : returns
-    nix ..> NixDevelopConfig : reads
+    nix ..> NixDevShellConfig : reads
 
     DevShellSession --> StatusBar : reports to
     DevShellSession ..> nix : lists shells
@@ -448,14 +448,14 @@ classDiagram
     extensions --> `extensions-manifest`
     extensions ..> DeclaredExtensions
     extensions ..> nix : run(launcher)
-    settings ..> NixDevelopConfig
+    settings ..> NixDevShellConfig
 
-    NixDevelopResolver ..|> RemoteAuthorityResolver
-    NixDevelopResolver --> ServerManager : owns per resolve
-    NixDevelopResolver ..> authority : decode, storage key
-    NixDevelopResolver ..> extensions
-    NixDevelopResolver ..> settings
-    NixDevelopResolver ..> nix : captureEnv, toInstallable
+    NixDevShellResolver ..|> RemoteAuthorityResolver
+    NixDevShellResolver --> ServerManager : owns per resolve
+    NixDevShellResolver ..> authority : decode, storage key
+    NixDevShellResolver ..> extensions
+    NixDevShellResolver ..> settings
+    NixDevShellResolver ..> nix : captureEnv, toInstallable
 
     remoteIndex ..> authority
     remoteIndex ..> ServerManager
@@ -464,14 +464,14 @@ classDiagram
 
     extension --> DevShellSession : one per folder
     extension --> StatusBar
-    extension ..> NixDevelopResolver : registers
+    extension ..> NixDevShellResolver : registers
     extension ..> remoteIndex
 ```
 
 ## What the shapes mean
 
 **Two lifetimes, not one.** `DevShellSession` exists per local workspace folder and only
-ever *chooses* a devShell; `NixDevelopResolver` exists per window and only ever *realises*
+ever *chooses* a devShell; `NixDevShellResolver` exists per window and only ever *realises*
 one. They never call each other. The handoff between them is not an object reference but a
 URI: the session hands a name to `reopenInDevShell`, which encodes it into an authority and
 asks VS Code to open a window, and the resolver in that new window decodes it back. The

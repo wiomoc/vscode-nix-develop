@@ -2,10 +2,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import type { NixDevelopConfig } from "../src/config";
+import type { NixDevShellConfig } from "../src/config";
 import { developCommand, nixCommand } from "../src/nix";
 
-const cfg: NixDevelopConfig = {
+const cfg: NixDevShellConfig = {
   flakeDirectory: ".",
   promptWhenUnset: true,
   impure: false,
@@ -89,7 +89,7 @@ describe("nix invocation", () => {
   });
 
   it("no profile means no --profile, and nothing written", async () => {
-    // `nixDevelop.profile: none`. The flag has to disappear entirely: `--profile` with an
+    // `nixDevShell.profile: none`. The flag has to disappear entirely: `--profile` with an
     // empty path is not the same request, it is an error.
     const unrooted = path.join(dir, "never", "devshell");
     const { args } = await developCommand(cfg, {

@@ -2,14 +2,20 @@
 
 ## Unreleased
 
+- **Renamed to `wiomoc.nix-devshell`, with no compatibility shim.** The extension id, the
+  `nixDevShell.*` settings and commands, the `nix-devshell+…` remote authority, the GC-root
+  directory `.vscode/nix-devshell/`, the machine settings file `nix-devshell.managed.json`
+  and the `NIX_DEVSHELL_*` environment variables all carry the new name. Nothing reads the
+  old ones: re-add `wiomoc.nix-devshell` to `argv.json`, rename your `nixDevelop.*` settings
+  keys, and delete the stale `.vscode/nix-develop/` directory to release its store paths.
 - **The missing-proposed-API warning now names `argv.json` and opens it.** `resolvers` is
   granted at launch and never mid-session, so telling someone to relaunch with
   `--enable-proposed-api` leaves them one dock click away from losing it again. `Reopen in
-  devShell` now shows the `"enable-proposed-api": ["wiomoc.nix-develop"]` line to add,
+  devShell` now shows the `"enable-proposed-api": ["wiomoc.nix-devshell"]` line to add,
   offers **Open argv.json** (`Preferences: Configure Runtime Arguments`), and says the
   editor has to be restarted for it to be read. The activation log line says the same.
-- The warning and the activation log named `nix-develop.nix-develop`, which is not the
-  extension id -- following it left the API just as ungranted. It is `wiomoc.nix-develop`,
+- The warning and the activation log named `nix-devshell.nix-devshell`, which is not the
+  extension id -- following it left the API just as ungranted. It is `wiomoc.nix-devshell`,
   as `docs/REMOTE.md` now also says.
 
 ## 0.6.4
@@ -73,7 +79,7 @@
   moves, since nothing in that window was depending on it.
 
 - **A devShell's extensions and editor settings are now declared only by the devShell.**
-  Four settings are gone: `nixDevelop.remote.extensions`, `remote.extensionsFromFlake`,
+  Four settings are gone: `nixDevShell.remote.extensions`, `remote.extensionsFromFlake`,
   `remote.settings` and `remote.settingsFromFlake`. What a devShell needs is
   `vscodeExtensions` and `vscodeSettings` on `mkShell`. The two workspace-settings
   equivalents were a second, weaker place to say the
@@ -96,7 +102,7 @@
   notification offers the restart. Editing the flake back to what the shell was built from
   clears it again.
 
-- **New command: Nix Develop: Restart devShell server.** Stops this window's server and
+- **New command: Nix DevShell: Restart devShell server.** Stops this window's server and
   reloads, which is what re-runs the resolver and rebuilds the shell. Reloading on its own
   would not do it: a server outlives its window, so the reload would attach straight back
   to the shell that is already running. This is also what the warning in the status bar
@@ -110,7 +116,7 @@
   handle could not fire, because a folder without a `flake.nix` had its session disposed on
   the spot and so had nothing watching it. Now a session is kept for every local folder --
   it is little more than a watcher -- deletion and creation are both handled, the
-  `nixDevelop.hasFlake` context and the status bar are re-derived when either happens, and
+  `nixDevShell.hasFlake` context and the status bar are re-derived when either happens, and
   a `flake.nix` appearing in a watched folder offers the picker the way one found at
   startup does. Editing a flake still only invalidates the devShell list: the offer is made
   when the flake appears, not on every save.
@@ -161,19 +167,19 @@
   logged once and answered with a pipe, which costs colour and nothing else. The terminal's
   width is passed through as well, and again on every resize, since Nix lays its bar out
   for the width it was told about.
-- **`nixDevelop.showBuildOutput` decides when that terminal appears**: `always` (the
+- **`nixDevShell.showBuildOutput` decides when that terminal appears**: `always` (the
   default) shows it as the build starts and leaves it, `onFailure` keeps it hidden and
   closes it again unless the window fails to open, `never` collects nothing.
 - **The devShell's GC root is now the project's, and it stays.** It was written into the
   extension's global storage and deleted the moment the server using it exited, which meant
   every closed window handed a whole toolchain back to the next `nix store gc`: reopening
   the folder rebuilt or re-fetched it, and offline it simply failed. A profile per devShell
-  now lives at `.vscode/nix-develop/<devShell>/devshell`, beside the project, and nothing
+  now lives at `.vscode/nix-devshell/<devShell>/devshell`, beside the project, and nothing
   removes it -- the directory is the user's to delete, and a `.gitignore` covering the whole
   of it is written alongside, so none of it can be committed. This is what `nix-direnv` does
   with `.direnv/`, for the reason it gives: losing a project's build cache to a garbage
   collection, on a flight, is not a trade worth making silently.
-- **`nixDevelop.profile` chooses between that and no root at all.** `persistent` (the
+- **`nixDevShell.profile` chooses between that and no root at all.** `persistent` (the
   default) is the above; `none` passes no `--profile` and writes nothing into the project.
   `none` is not as bare as it sounds -- Nix's GC scans `/proc` for store paths a live
   process references, so a *running* server is largely spared -- but nothing covers the gap
@@ -203,7 +209,7 @@
   picks and spelling it out distinguishes nothing.
 - Implemented by registering a second `ResourceLabelFormatter` bound to the window's exact
   authority. VS Code resolves competing formatters by preferring the longest matching
-  authority pattern, so it outranks the `nix-develop+*` fallback.
+  authority pattern, so it outranks the `nix-devshell+*` fallback.
 
 
 ## 0.6.2
@@ -219,7 +225,7 @@
 
 ## Unreleased
 
-- **`nixDevelop.remote.patchServerLd` (default `true`) turns the `node` patching off.**
+- **`nixDevShell.remote.patchServerLd` (default `true`) turns the `node` patching off.**
   With it off neither the binary nor the environment is touched and no nixpkgs attribute is
   evaluated at all -- the only way this costs nothing on a cold store. For hosts that
   resolve `/lib64/ld-linux-*` themselves: `programs.nix-ld`, or simply not NixOS. Left on,
@@ -261,8 +267,8 @@
   managed: other keys in that file, including edits made from the settings UI, survive, and
   a key the flake stops declaring is removed on the next open. The file is rewritten only
   when the effective settings change, so comments in it survive too.
-  `nixDevelop.remote.settings` is the per-checkout equivalent and wins where both name the
-  same key; `nixDevelop.remote.settingsFromFlake: false` turns the flake side off.
+  `nixDevShell.remote.settings` is the per-checkout equivalent and wins where both name the
+  same key; `nixDevShell.remote.settingsFromFlake: false` turns the flake side off.
   Reading the shell is shared with extension discovery, so it costs no extra evaluation.
 
 - **Works on VSCodium, and on rebuilds generally.** The claim that VSCodium "has no
@@ -284,14 +290,14 @@
   flat and the distribution found either at the top or in a single wrapper. Getting this
   wrong leaves a directory that looks extracted and contains nothing, so it is now a clear
   error instead.
-- `nixDevelop.remote.serverDownloadUrl` now defaults to empty, meaning "detect it". Set it
+- `nixDevShell.remote.serverDownloadUrl` now defaults to empty, meaning "detect it". Set it
   only to override. It gained `${quality}`, `${version}`, `${os}` and `${arch}` alongside
   the existing `${commit}` and `${platform}`, which keeps any existing override working.
 - Extensions under VSCodium come from Open VSX, since that is the gallery its server is
   built with. Anything published only to the Microsoft Marketplace cannot be installed into
   a devShell window there -- a property of VSCodium, not something this extension can fix.
 
-- **`nixDevelop.remote.patchServerForNixOS` is removed; the server's `node` is always
+- **`nixDevShell.remote.patchServerForNixOS` is removed; the server's `node` is always
   patched against a nixpkgs glibc.** A machine using this extension has Nix, so the glibc
   and patchelf are cached builds after the first, and patching a `node` that would have
   started anyway changes nothing at runtime. The `auto` mode was paying for a `/etc/NIXOS`
@@ -354,7 +360,7 @@
   binary and skip it silently, so the file returned no matches for any search and a review
   concluded one of its exports was dead. Both are now escapes, compiling to the same strings.
   A test keeps either from coming back.
-- **`nixDevelop.impure` never worked.** `--impure` was placed before the Nix subcommand, and
+- **`nixDevShell.impure` never worked.** `--impure` was placed before the Nix subcommand, and
   Nix accepts it only after one, so every invocation died with `unrecognised flag '--impure'`
   the moment the setting was turned on. It now sits where Nix expects it. The bug was hidden
   because a second defect kept the setting from reaching the resolver at all.
@@ -368,12 +374,12 @@
   the GC root cannot be omitted again, and `impure`/`extraArgs` can no longer drift between
   callers -- they previously applied inconsistently.
 - **The selected devShell is no longer written to workspace settings.** Picking a shell
-  opened a window against it *and* wrote `nixDevelop.devShell` into `.vscode/settings.json`,
+  opened a window against it *and* wrote `nixDevShell.devShell` into `.vscode/settings.json`,
   which meant trying out a devShell silently edited a file the project commits. The window's
   authority already carries the devShell, so the write bought nothing.
 - The picker's "None" entry is gone with the setting it used to clear; dismissing the picker
   does the same thing.
-- **`nixDevelop.devShell` and `nixDevelop.autoActivate` are removed.** Once the extension
+- **`nixDevShell.devShell` and `nixDevShell.autoActivate` are removed.** Once the extension
   stopped writing the selection, `devShell` was a second, weaker answer to a question the
   window's authority already answers: a local window with the setting set was "a devShell is
   selected but you are not in it", a state whose only action was to offer to reopen. Deleting
@@ -410,7 +416,7 @@
 
 ## 0.6.0
 
-- **The remote authority now describes its own target.** `nix-develop+<base64url payload>`
+- **The remote authority now describes its own target.** `nix-devshell+<base64url payload>`
   encodes the folder, devShell and flake directory, replacing an opaque digest plus a JSON
   side table in global storage. The registry file, its cross-window synchronisation and the
   "unknown authority" failure mode are all gone, and an entry in "recently opened" keeps
@@ -431,7 +437,7 @@ Two features removed, leaving one way to do things.
 
 - **The shared extension directory is gone.** Every devShell now has its own, keyed by
   folder + devShell. A devShell's extension set is therefore exactly what it declares,
-  pruning is unconditionally safe, and `nixDevelop.remote.isolateExtensions` no longer
+  pruning is unconditionally safe, and `nixDevShell.remote.isolateExtensions` no longer
   exists. Use **Install Local Extensions...** to seed a new devShell.
 - **The `env` mode is gone.** A selected devShell is used by opening a window whose server
   runs inside `nix develop` -- there is no longer a second path that copies environment
@@ -439,8 +445,8 @@ Two features removed, leaving one way to do things.
   activated, so it behaved subtly differently from the real thing; `direnv` is the better
   tool for putting a devShell into a plain shell.
 
-Removed with them: `nixDevelop.mode`, `nixDevelop.applyToExtensionHost`,
-`nixDevelop.respectDirenv`, `nixDevelop.ignoredVariables`, `nixDevelop.pathLikeVariables`,
+Removed with them: `nixDevShell.mode`, `nixDevShell.applyToExtensionHost`,
+`nixDevShell.respectDirenv`, `nixDevShell.ignoredVariables`, `nixDevShell.pathLikeVariables`,
 and the **Reload environment** and **Deactivate** commands. Without the `resolvers`
 proposed API there is now no fallback, so the extension says so on activation instead of
 failing at reopen.
@@ -479,7 +485,7 @@ a devShell *mismatch* between `.envrc` and the workspace is reported.
 - **direnv co-existence.** When the flake directory has an `.envrc` that runs `use flake`
   or `use nix`, direnv already puts the devShell into every shell entering the directory.
   Applying it again duplicated every store path on PATH, so the environment is now left to
-  direnv; the status bar says so. `nixDevelop.respectDirenv` turns this off, and
+  direnv; the status bar says so. `nixDevShell.respectDirenv` turns this off, and
   "Reload environment" applies it anyway. A stale `.direnv/` with no `.envrc` is ignored.
 - If `.envrc` names a different devShell than the workspace selects, that mismatch is now
   reported instead of the two silently disagreeing.
@@ -511,11 +517,11 @@ a devShell *mismatch* between `.envrc` and the workspace is reported.
 ## 0.2.2
 
 - Selecting a devShell now actually does something: in `auto`/`remote` mode it opens the
-  devShell window instead of only writing a setting. Added `nixDevelop.mode` to choose
+  devShell window instead of only writing a setting. Added `nixDevShell.mode` to choose
   between a devShell window and applying the environment in place.
 - devShells can be switched from inside a devShell window. Previously the command reported
   "No flake.nix found" there, because a remote window has no local workspace folder.
-- `nixDevelop.remote.isolateExtensions` now defaults to **false**, so devShell windows
+- `nixDevShell.remote.isolateExtensions` now defaults to **false**, so devShell windows
   share one extension set the way Remote-SSH does. With isolation on and nothing seeded,
   a devShell window had none of your extensions, which looked like the environment having
   failed to apply even though the toolchain was present.
@@ -540,16 +546,16 @@ a devShell *mismatch* between `.envrc` and the workspace is reported.
 
 ## 0.2.0
 
-- **Real remote windows.** `Nix Develop: Reopen in devShell` implements a
-  `RemoteAuthorityResolver`: the folder reopens on a `vscode-remote://nix-develop+…`
+- **Real remote windows.** `Nix DevShell: Reopen in devShell` implements a
+  `RemoteAuthorityResolver`: the folder reopens on a `vscode-remote://nix-devshell+…`
   authority and a VS Code server is started inside `nix develop`, so the remote extension
   host, terminals, tasks and debuggers run in the shell. Requires
-  `--enable-proposed-api nix-develop.nix-develop`.
+  `--enable-proposed-api nix-devshell.nix-devshell`.
 - **Per-devShell extension sets.** The server's `--extensions-dir` is scoped per devShell.
   Extensions can be declared in workspace settings or by the devShell itself through a
   `vscodeExtensions` list attribute on `mkShell`.
 - Servers are reused across windows via a lock file and can be stopped with
-  `Nix Develop: Stop devShell server`.
+  `Nix DevShell: Stop devShell server`.
 - On NixOS, the server's bundled glibc `node` is patched through the launcher's own
   `VSCODE_SERVER_CUSTOM_GLIBC_*` hooks, and only when it actually fails to start.
 - Removed the `code tunnel` / `code serve-web` re-entry paths in favour of the resolver.
@@ -559,7 +565,7 @@ a devShell *mismatch* between `.envrc` and the workspace is reported.
 Initial release.
 
 - Prompts to pick a devShell when a workspace containing `flake.nix` is opened.
-- Persists the choice to workspace settings (`nixDevelop.devShell`).
+- Persists the choice to workspace settings (`nixDevShell.devShell`).
 - Builds the devShell and applies its environment to terminals, tasks, and the
   extension host.
 - Pins each built shell with a Nix profile GC root.

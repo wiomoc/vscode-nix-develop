@@ -13,7 +13,7 @@ see [../docs/REMOTE.md](../docs/REMOTE.md).
 
 A **local window** discovers the flake's devShells (`DevShellSession`) and asks which one
 to use. The answer is not stored: it is encoded into a **remote authority**
-(`nix-develop+<base32>`) and VS Code is asked to open the folder against it. In the window
+(`nix-devshell+<base32>`) and VS Code is asked to open the folder against it. In the window
 that opens, the **resolver** decodes that authority back into a target, starts a VS Code
 server *inside* `nix develop`, and hands back the port. Everything the remote extension
 host then spawns — terminals, tasks, debuggers, language servers — is a child of a process
@@ -21,7 +21,7 @@ in the devShell, so it is in the shell for real rather than approximated.
 
 Three things persist, and nothing else: the authority (in the window and its history), a
 lock file naming the running server, and a Nix profile holding the built shell as a GC root
-— that one in the project, under `.vscode/nix-develop/`, where it outlives the servers that
+— that one in the project, under `.vscode/nix-devshell/`, where it outlives the servers that
 use it.
 
 ## Keeping the diagrams honest

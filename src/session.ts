@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { flakeDir, readConfig, type NixDevelopConfig } from "./config";
+import { flakeDir, readConfig, type NixDevShellConfig } from "./config";
 import { detectDirenv } from "./direnv";
 import { log } from "./utils/log";
 import {
@@ -15,7 +15,7 @@ import { pickDevShell, type Selection, StatusBar } from "./ui";
 import { exists } from "./utils/fs-stat";
 import { reopenInDevShell } from "./remote";
 
-const SYSTEM_KEY = "nixDevelop.currentSystem";
+const SYSTEM_KEY = "nixDevShell.currentSystem";
 
 /** How long the flake has to sit still before its change is acted on. */
 export const FLAKE_DEBOUNCE_MS = 750;
@@ -57,7 +57,7 @@ export class DevShellSession implements vscode.Disposable {
     return this.folder;
   }
 
-  private cfg(): NixDevelopConfig {
+  private cfg(): NixDevShellConfig {
     return readConfig(this.folder);
   }
 
@@ -74,7 +74,7 @@ export class DevShellSession implements vscode.Disposable {
    * and resolving it costs a Nix process on the path to showing the picker.
    */
   private async system(
-    cfg: NixDevelopConfig,
+    cfg: NixDevShellConfig,
     token?: vscode.CancellationToken,
   ): Promise<string> {
     if (this.systemCache) return this.systemCache;
@@ -92,7 +92,7 @@ export class DevShellSession implements vscode.Disposable {
    * Re-evaluating on every picker open is wasted work: the answer can only change when
    * flake.nix or flake.lock does.
    */
-  private async devShells(cfg: NixDevelopConfig): Promise<DevShell[]> {
+  private async devShells(cfg: NixDevShellConfig): Promise<DevShell[]> {
     const stamp = await this.flakeStamp();
     if (this.shellCache && this.shellCache.stamp === stamp) {
       log.debug("devShell list served from cache");
@@ -218,7 +218,7 @@ export class DevShellSession implements vscode.Disposable {
       }
     } else if (choice === "Never for this workspace") {
       await vscode.workspace
-        .getConfiguration("nixDevelop", this.folder.uri)
+        .getConfiguration("nixDevShell", this.folder.uri)
         .update("promptWhenUnset", false, vscode.ConfigurationTarget.Workspace);
     }
   }
@@ -233,7 +233,7 @@ export class DevShellSession implements vscode.Disposable {
    * already tracked -- and everything the host derives from that.
    */
   private watchFlake(): void {
-    // Folder-wide rather than bound to `dir()`, because `nixDevelop.flakeDirectory` can
+    // Folder-wide rather than bound to `dir()`, because `nixDevShell.flakeDirectory` can
     // move which directory this session means without the watcher being rebuilt. Which
     // directory an event has to be in is therefore decided when the event arrives.
     const pattern = new vscode.RelativePattern(

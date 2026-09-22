@@ -1,16 +1,16 @@
 {
-  "name": "nix-develop",
-  "displayName": "Nix Develop",
+  "name": "nix-devshell",
+  "displayName": "Nix DevShell",
   "description": "Select a devShell from your flake.nix and reopen the workspace inside it, with the editor running in nix develop.",
   "version": "0.6.4",
   "publisher": "wiomoc",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/wiomoc/vscode-nix-develop.git"
+    "url": "https://github.com/wiomoc/vscode-nix-devshell.git"
   },
   "bugs": {
-    "url": "https://github.com/wiomoc/vscode-nix-develop/issues"
+    "url": "https://github.com/wiomoc/vscode-nix-devshell/issues"
   },
   "engines": {
     "vscode": "^1.85.0"
@@ -30,7 +30,7 @@
   "activationEvents": [
     "workspaceContains:flake.nix",
     "workspaceContains:*/flake.nix",
-    "onResolveRemoteAuthority:nix-develop"
+    "onResolveRemoteAuthority:nix-devshell"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
@@ -41,68 +41,68 @@
   "contributes": {
     "commands": [
       {
-        "command": "nixDevelop.selectDevShell",
+        "command": "nixDevShell.selectDevShell",
         "title": "Select devShell",
-        "category": "Nix Develop"
+        "category": "Nix DevShell"
       },
       {
-        "command": "nixDevelop.showEnvironment",
+        "command": "nixDevShell.showEnvironment",
         "title": "Show resolved environment",
-        "category": "Nix Develop"
+        "category": "Nix DevShell"
       },
       {
-        "command": "nixDevelop.showLog",
+        "command": "nixDevShell.showLog",
         "title": "Show log",
-        "category": "Nix Develop"
+        "category": "Nix DevShell"
       },
       {
-        "command": "nixDevelop.reopenInDevShell",
+        "command": "nixDevShell.reopenInDevShell",
         "title": "Reopen in devShell",
-        "category": "Nix Develop"
+        "category": "Nix DevShell"
       },
       {
-        "command": "nixDevelop.reopenLocally",
+        "command": "nixDevShell.reopenLocally",
         "title": "Reopen folder locally",
-        "category": "Nix Develop"
+        "category": "Nix DevShell"
       },
       {
-        "command": "nixDevelop.remoteExtensions",
+        "command": "nixDevShell.remoteExtensions",
         "title": "Show devShell extensions (remote)",
-        "category": "Nix Develop"
+        "category": "Nix DevShell"
       },
       {
-        "command": "nixDevelop.restartDevShell",
+        "command": "nixDevShell.restartDevShell",
         "title": "Restart devShell server",
-        "category": "Nix Develop"
+        "category": "Nix DevShell"
       },
       {
-        "command": "nixDevelop.killServer",
+        "command": "nixDevShell.killServer",
         "title": "Stop devShell server",
-        "category": "Nix Develop"
+        "category": "Nix DevShell"
       }
     ],
     "configuration": {
-      "title": "Nix Develop",
+      "title": "Nix DevShell",
       "properties": {
-        "nixDevelop.flakeDirectory": {
+        "nixDevShell.flakeDirectory": {
           "type": "string",
           "default": ".",
           "scope": "resource",
           "markdownDescription": "Directory containing `flake.nix`, relative to the workspace folder."
         },
-        "nixDevelop.promptWhenUnset": {
+        "nixDevShell.promptWhenUnset": {
           "type": "boolean",
           "default": true,
           "scope": "resource",
           "description": "Prompt to pick a devShell when a flake.nix is present but no devShell has been selected yet."
         },
-        "nixDevelop.impure": {
+        "nixDevShell.impure": {
           "type": "boolean",
           "default": false,
           "scope": "resource",
           "description": "Pass --impure to nix develop."
         },
-        "nixDevelop.extraArgs": {
+        "nixDevShell.extraArgs": {
           "type": "array",
           "items": {
             "type": "string"
@@ -111,19 +111,19 @@
           "scope": "resource",
           "description": "Additional arguments passed to nix develop."
         },
-        "nixDevelop.nixPath": {
+        "nixDevShell.nixPath": {
           "type": "string",
           "default": "nix",
           "scope": "machine",
           "description": "Path to the nix executable."
         },
-        "nixDevelop.buildTimeoutSeconds": {
+        "nixDevShell.buildTimeoutSeconds": {
           "type": "number",
           "default": 1800,
           "scope": "resource",
           "description": "Abort the devShell build after this many seconds."
         },
-        "nixDevelop.profile": {
+        "nixDevShell.profile": {
           "type": "string",
           "enum": [
             "persistent",
@@ -132,12 +132,12 @@
           "default": "persistent",
           "scope": "resource",
           "enumDescriptions": [
-            "Keep a Nix profile per devShell under .vscode/nix-develop/, and leave it there. The built shell survives `nix store gc`, so reopening the folder -- offline, or after a garbage collection -- costs nothing. The directory is gitignored for you; delete it to release the store paths.",
+            "Keep a Nix profile per devShell under .vscode/nix-devshell/, and leave it there. The built shell survives `nix store gc`, so reopening the folder -- offline, or after a garbage collection -- costs nothing. The directory is gitignored for you; delete it to release the store paths.",
             "Pass no --profile. Nothing roots the devShell: `nix store gc` may collect it between building the shell and starting the server, and will collect it once the server exits. Nothing is written into the project."
           ],
-          "markdownDescription": "How the built devShell is kept alive against `nix store gc`.\n\n`--profile` is the only thing that makes a devShell a GC root. `persistent` writes one per devShell under `.vscode/nix-develop/<devShell>/` -- next to the project, with a `.gitignore` covering the whole directory -- and never removes it, so the toolchain a window needs is still there after a garbage collection or on a flight. `none` writes nothing into the project and accepts that the shell may be collected; on Linux, Nix's GC still spares store paths a *running* process references, so this mostly costs you rebuilds rather than a broken window."
+          "markdownDescription": "How the built devShell is kept alive against `nix store gc`.\n\n`--profile` is the only thing that makes a devShell a GC root. `persistent` writes one per devShell under `.vscode/nix-devshell/<devShell>/` -- next to the project, with a `.gitignore` covering the whole directory -- and never removes it, so the toolchain a window needs is still there after a garbage collection or on a flight. `none` writes nothing into the project and accepts that the shell may be collected; on Linux, Nix's GC still spares store paths a *running* process references, so this mostly costs you rebuilds rather than a broken window."
         },
-        "nixDevelop.showBuildOutput": {
+        "nixDevShell.showBuildOutput": {
           "type": "string",
           "enum": [
             "always",
@@ -153,19 +153,19 @@
           ],
           "markdownDescription": "Whether to show what `nix develop` is doing while a devShell window opens.\n\nThe devShell is built before the editor's server starts, so downloads, compiles and the evaluation error that says which attribute is missing all happen there. The output goes to a terminal named after the devShell, with Nix asked for `--log-format bar-with-logs` so the full build logs arrive rather than the handful of lines Nix prints by default."
         },
-        "nixDevelop.remote.serverDownloadUrl": {
+        "nixDevShell.remote.serverDownloadUrl": {
           "type": "string",
           "default": "",
           "scope": "machine",
           "markdownDescription": "Where to fetch the editor's server. Leave empty to detect it: VSCodium and other rebuilds declare their own `serverDownloadUrlTemplate` in `product.json`, and Microsoft builds fall back to `update.code.visualstudio.com`. Set this only to override that. The placeholders `${commit}`, `${quality}`, `${version}`, `${os}`, `${arch}` and `${platform}` (`${os}-${arch}`) are substituted."
         },
-        "nixDevelop.remote.connectTimeoutSeconds": {
+        "nixDevShell.remote.connectTimeoutSeconds": {
           "type": "number",
           "default": 180,
           "scope": "machine",
           "description": "How long to wait for the devShell server to report a listening port."
         },
-        "nixDevelop.remote.patchServerLd": {
+        "nixDevShell.remote.patchServerLd": {
           "type": "boolean",
           "default": true,
           "scope": "machine",
@@ -176,32 +176,32 @@
     "menus": {
       "commandPalette": [
         {
-          "command": "nixDevelop.selectDevShell",
-          "when": "nixDevelop.inDevShell"
+          "command": "nixDevShell.selectDevShell",
+          "when": "nixDevShell.inDevShell"
         },
         {
-          "command": "nixDevelop.showEnvironment",
-          "when": "nixDevelop.hasFlake || nixDevelop.inDevShell"
+          "command": "nixDevShell.showEnvironment",
+          "when": "nixDevShell.hasFlake || nixDevShell.inDevShell"
         },
         {
-          "command": "nixDevelop.reopenInDevShell",
-          "when": "nixDevelop.hasFlake && !nixDevelop.inDevShell"
+          "command": "nixDevShell.reopenInDevShell",
+          "when": "nixDevShell.hasFlake && !nixDevShell.inDevShell"
         },
         {
-          "command": "nixDevelop.reopenLocally",
-          "when": "nixDevelop.inDevShell"
+          "command": "nixDevShell.reopenLocally",
+          "when": "nixDevShell.inDevShell"
         },
         {
-          "command": "nixDevelop.remoteExtensions",
-          "when": "nixDevelop.inDevShell"
+          "command": "nixDevShell.remoteExtensions",
+          "when": "nixDevShell.inDevShell"
         },
         {
-          "command": "nixDevelop.restartDevShell",
-          "when": "nixDevelop.inDevShell"
+          "command": "nixDevShell.restartDevShell",
+          "when": "nixDevShell.inDevShell"
         },
         {
-          "command": "nixDevelop.killServer",
-          "when": "nixDevelop.hasFlake || nixDevelop.inDevShell"
+          "command": "nixDevShell.killServer",
+          "when": "nixDevShell.hasFlake || nixDevShell.inDevShell"
         }
       ]
     }
@@ -215,7 +215,7 @@
     "test:unit": "vitest run --tagsFilter '!e2e'",
     "test:e2e": "vitest run --tagsFilter e2e",
     "test:watch": "vitest --tagsFilter '!e2e'",
-    "test:server": "NIX_DEVELOP_COMMIT=$(code --version | sed -n 2p) vitest run --tagsFilter e2e",
+    "test:server": "NIX_DEVSHELL_COMMIT=$(code --version | sed -n 2p) vitest run --tagsFilter e2e",
     "package": "vsce package --no-dependencies"
   },
   "devDependencies": {

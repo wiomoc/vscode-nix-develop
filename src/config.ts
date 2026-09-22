@@ -1,16 +1,16 @@
 import * as vscode from "vscode";
 import * as path from "node:path";
 
-export interface NixDevelopConfig {
+export interface NixDevShellConfig {
   flakeDirectory: string;
   promptWhenUnset: boolean;
   impure: boolean;
   extraArgs: string[];
   nixPath: string;
   buildTimeoutSeconds: number;
-  /** See `nixDevelop.profile`, and `ProfileMode` in `profile.ts`. */
+  /** See `nixDevShell.profile`, and `ProfileMode` in `profile.ts`. */
   profile: "persistent" | "none";
-  /** See `nixDevelop.showBuildOutput`, and `BuildTerminal` in `utils/build-terminal.ts`. */
+  /** See `nixDevShell.showBuildOutput`, and `BuildTerminal` in `utils/build-terminal.ts`. */
   showBuildOutput: BuildOutputMode;
   remote: RemoteConfig;
 }
@@ -41,9 +41,9 @@ export interface RemoteConfig {
 /** Editor settings, as they appear in a `settings.json`. */
 export type SettingsMap = Record<string, unknown>;
 
-export const SECTION = "nixDevelop";
+export const SECTION = "nixDevShell";
 
-export function readConfig(scope: vscode.WorkspaceFolder | undefined): NixDevelopConfig {
+export function readConfig(scope: vscode.WorkspaceFolder | undefined): NixDevShellConfig {
   const c = vscode.workspace.getConfiguration(SECTION, scope?.uri);
   return {
     flakeDirectory: c.get<string>("flakeDirectory", ".") || ".",
@@ -64,7 +64,7 @@ export function readConfig(scope: vscode.WorkspaceFolder | undefined): NixDevelo
 }
 
 /** Absolute path of the directory holding flake.nix for this workspace folder. */
-export function flakeDir(folder: vscode.WorkspaceFolder, cfg: NixDevelopConfig): string {
+export function flakeDir(folder: vscode.WorkspaceFolder, cfg: NixDevShellConfig): string {
   return path.resolve(folder.uri.fsPath, cfg.flakeDirectory);
 }
 
@@ -72,7 +72,7 @@ export function flakeDir(folder: vscode.WorkspaceFolder, cfg: NixDevelopConfig):
  * `publisher.name` from package.json -- the id `--enable-proposed-api` and the
  * `enable-proposed-api` entry in `argv.json` have to name.
  */
-export const EXTENSION_ID = "wiomoc.nix-develop";
+export const EXTENSION_ID = "wiomoc.nix-devshell";
 
 /**
  * Whether the `resolvers` proposed API was granted this session.

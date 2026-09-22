@@ -44,37 +44,37 @@ describe("activation", () => {
 
   it("registers every contributed command", () => {
     for (const id of [
-      "nixDevelop.selectDevShell",
-      "nixDevelop.showEnvironment",
-      "nixDevelop.showLog",
-      "nixDevelop.reopenInDevShell",
-      "nixDevelop.reopenLocally",
-      "nixDevelop.remoteExtensions",
-      "nixDevelop.killServer",
+      "nixDevShell.selectDevShell",
+      "nixDevShell.showEnvironment",
+      "nixDevShell.showLog",
+      "nixDevShell.reopenInDevShell",
+      "nixDevShell.reopenLocally",
+      "nixDevShell.remoteExtensions",
+      "nixDevShell.killServer",
     ]) {
       expect(stub.recorded.commands, `command ${id} was never registered`).toContain(id);
     }
   });
 
   it("registers the remote authority resolver when the API is present", () => {
-    expect(stub.recorded.resolverPrefix).toEqual("nix-develop");
+    expect(stub.recorded.resolverPrefix).toEqual("nix-devshell");
     expect(stub.recorded.labelFormatter, "the resource label formatter should be registered").toBe(true);
   });
 
   it("publishes the context keys the menus depend on", () => {
-    expect("nixDevelop.hasFlake" in stub.recorded.contexts, "hasFlake context was never set").toBe(true);
-    expect("nixDevelop.inDevShell" in stub.recorded.contexts, "inDevShell context was never set").toBe(true);
+    expect("nixDevShell.hasFlake" in stub.recorded.contexts, "hasFlake context was never set").toBe(true);
+    expect("nixDevShell.inDevShell" in stub.recorded.contexts, "inDevShell context was never set").toBe(true);
   });
 
   it("activates inside a devShell window without throwing", async () => {
     ext.deactivate();
     stub.recorded.commands.length = 0;
-    stub.env.remoteAuthority = "nix-develop+deadbeefdeadbeef";
+    stub.env.remoteAuthority = "nix-devshell+deadbeefdeadbeef";
     const ctx2 = { ...context, subscriptions: [] as { dispose(): void }[] };
     await ext.activate(ctx2 as never);
-    expect(stub.recorded.contexts["nixDevelop.inDevShell"]).toEqual(true);
+    expect(stub.recorded.contexts["nixDevShell.inDevShell"]).toEqual(true);
     expect(
-      stub.recorded.commands.includes("nixDevelop.selectDevShell"),
+      stub.recorded.commands.includes("nixDevShell.selectDevShell"),
       "switching devShells must stay available inside a devShell window",
     ).toBe(true);
     ext.deactivate();

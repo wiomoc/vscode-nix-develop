@@ -49,7 +49,7 @@ export async function pickDevShell(
   );
 
   const picked = await vscode.window.showQuickPick(items, {
-    title: "Nix Develop: select a devShell",
+    title: "Nix DevShell: select a devShell",
     placeHolder:
       shells.length > 0
         ? "Pick the devShell to open this workspace in"
@@ -61,7 +61,7 @@ export async function pickDevShell(
 
   if (picked.label.startsWith("$(edit)")) {
     const entered = await vscode.window.showInputBox({
-      title: "Nix Develop: flake installable",
+      title: "Nix DevShell: flake installable",
       prompt: "Passed straight to `nix develop`",
       value: current || ".#devShells.",
       ignoreFocusOut: true,
@@ -85,11 +85,11 @@ export class StatusBar implements vscode.Disposable {
 
   constructor() {
     this.item = vscode.window.createStatusBarItem(
-      "nixDevelop.status",
+      "nixDevShell.status",
       vscode.StatusBarAlignment.Left,
       100,
     );
-    this.item.name = "Nix Develop";
+    this.item.name = "Nix DevShell";
     this.set({ kind: "idle" });
   }
 
@@ -103,7 +103,7 @@ export class StatusBar implements vscode.Disposable {
         this.item.tooltip = "No devShell selected — click to pick one";
         // Only a local window is ever "unset", and there picking a devShell *is* opening a
         // window in it.
-        this.item.command = "nixDevelop.reopenInDevShell";
+        this.item.command = "nixDevShell.reopenInDevShell";
         this.item.backgroundColor = undefined;
         break;
       case "active":
@@ -111,7 +111,7 @@ export class StatusBar implements vscode.Disposable {
         this.item.tooltip = new vscode.MarkdownString(
           `**Nix devShell active**\n\n\`${state.label}\`\n\n${state.summary}\n\n_Click to switch devShell._`,
         );
-        this.item.command = "nixDevelop.selectDevShell";
+        this.item.command = "nixDevShell.selectDevShell";
         this.item.backgroundColor = undefined;
         break;
       case "stale":
@@ -122,7 +122,7 @@ export class StatusBar implements vscode.Disposable {
           `**Nix devShell out of date**\n\n\`${state.label}\`\n\n${state.reason}\n\n` +
             `_Click to restart the devShell server._`,
         );
-        this.item.command = "nixDevelop.restartDevShell";
+        this.item.command = "nixDevShell.restartDevShell";
         this.item.backgroundColor = new vscode.ThemeColor(
           "statusBarItem.warningBackground",
         );
@@ -130,7 +130,7 @@ export class StatusBar implements vscode.Disposable {
       case "error":
         this.item.text = `$(error) ${state.label}`;
         this.item.tooltip = `devShell failed: ${state.message}\nClick to view the log.`;
-        this.item.command = "nixDevelop.showLog";
+        this.item.command = "nixDevShell.showLog";
         this.item.backgroundColor = new vscode.ThemeColor(
           "statusBarItem.errorBackground",
         );

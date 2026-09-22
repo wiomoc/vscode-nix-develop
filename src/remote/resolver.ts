@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { readConfig, type NixDevelopConfig } from "../config";
+import { readConfig, type NixDevShellConfig } from "../config";
 import { ensureProfile } from "../profile";
 import { BuildTerminal } from "../utils/build-terminal";
 import { log } from "../utils/log";
@@ -30,7 +30,7 @@ import { ServerManager } from "./server";
 import { patchServerNode as patchServerLd } from "./server-ld-patch";
 
 /**
- * Resolves `vscode-remote://nix-develop+<id>/...` authorities.
+ * Resolves `vscode-remote://nix-devshell+<id>/...` authorities.
  *
  * This is the mechanism Dev Containers and Remote-SSH use. VS Code calls `resolve()`
  * during startup of a remote window and again after every disconnection; the job is to
@@ -40,9 +40,9 @@ import { patchServerNode as patchServerLd } from "./server-ld-patch";
  * approximating it by patching environment variables.
  *
  * Requires the `resolvers` proposed API, i.e. VS Code launched with
- * `--enable-proposed-api wiomoc.nix-develop`.
+ * `--enable-proposed-api wiomoc.nix-devshell`.
  */
-export class NixDevelopResolver implements vscode.RemoteAuthorityResolver {
+export class NixDevShellResolver implements vscode.RemoteAuthorityResolver {
   /** The terminal of the most recent build, kept only to retire it when the next starts. */
   private build?: BuildTerminal;
 
@@ -184,7 +184,7 @@ export class NixDevelopResolver implements vscode.RemoteAuthorityResolver {
    * created and disposed around a single call.
    */
   private async startFresh(opts: {
-    cfg: NixDevelopConfig;
+    cfg: NixDevShellConfig;
     target: RemoteTarget;
     commit: string;
     key: string;
@@ -201,7 +201,7 @@ export class NixDevelopResolver implements vscode.RemoteAuthorityResolver {
       await patchServerLd(cfg, launcher, target.flakeDir);
     } else {
       log.info(
-        `nixDevelop.remote.patchServerLd is off; leaving node of ${launcher} as it is`,
+        `nixDevShell.remote.patchServerLd is off; leaving node of ${launcher} as it is`,
       );
     }
 
@@ -214,7 +214,7 @@ export class NixDevelopResolver implements vscode.RemoteAuthorityResolver {
     // One profile per devShell, shared by everything that enters it: reading the
     // environment and running the server are the same shell, so they are the same GC root.
     // It lives beside the project rather than in global storage, and it stays there --
-    // see `ensureProfile`. `undefined` is `nixDevelop.profile: none`, or a folder that
+    // see `ensureProfile`. `undefined` is `nixDevShell.profile: none`, or a folder that
     // could not be written to.
     const profile = await ensureProfile(cfg, target.folder, target.devShell);
 
@@ -264,8 +264,8 @@ export class NixDevelopResolver implements vscode.RemoteAuthorityResolver {
       // The server already inherits the devShell, since it was started inside `nix develop`.
       // These are markers so the remote window can tell what it is running in.
       extensionHostEnv: {
-        NIX_DEVELOP_SHELL: target.devShell,
-        NIX_DEVELOP_FLAKE: target.flakeDir,
+        NIX_DEVSHELL_SHELL: target.devShell,
+        NIX_DEVSHELL_FLAKE: target.flakeDir,
       },
       isTrusted: true,
     };
@@ -279,7 +279,7 @@ export class NixDevelopResolver implements vscode.RemoteAuthorityResolver {
    * not fatal: the window still opens, only without what the flake declared.
    */
   private async readDevShellEnv(opts: {
-    cfg: NixDevelopConfig;
+    cfg: NixDevShellConfig;
     target: RemoteTarget;
     installable: string;
     profile: string | undefined;
@@ -368,7 +368,7 @@ export class NixDevelopResolver implements vscode.RemoteAuthorityResolver {
     });
     if (failed.length > 0) {
       void vscode.window.showWarningMessage(
-        `Could not install into the devShell: ${failed.join(", ")}. See the Nix Develop log.`,
+        `Could not install into the devShell: ${failed.join(", ")}. See the Nix DevShell log.`,
       );
     }
   }

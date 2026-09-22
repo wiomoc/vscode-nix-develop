@@ -4,7 +4,7 @@ import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import type { NixDevelopConfig } from "../config";
+import type { NixDevShellConfig } from "../config";
 import { log } from "../utils/log";
 import { developCommand } from "../nix";
 import { clientProduct, serverDownloadUrl, serverOsArch } from "./product";
@@ -39,7 +39,7 @@ export function serverPlatform(): string {
 export class ServerManager {
   constructor(
     private readonly globalStorage: vscode.Uri,
-    private readonly cfg: NixDevelopConfig,
+    private readonly cfg: NixDevShellConfig,
   ) {}
 
   private get root(): string {
@@ -251,9 +251,9 @@ export class ServerManager {
   /**
    * Give up what a departed server held: its lock.
    *
-   * The devShell's GC root is not touched. A profile under `.vscode/nix-develop/` is meant
+   * The devShell's GC root is not touched. A profile under `.vscode/nix-devshell/` is meant
    * to outlive the servers that enter it -- that is the whole of
-   * `nixDevelop.profile: persistent` -- so the store paths stay put for the next window,
+   * `nixDevShell.profile: persistent` -- so the store paths stay put for the next window,
    * offline or not, and the directory is the user's to delete.
    *
    * Nothing runs inside the devShell to do this at the moment a server exits: the server is

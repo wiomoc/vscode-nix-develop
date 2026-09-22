@@ -121,10 +121,10 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
             "${notes[@]}" \
-            "nix-develop-$VERSION.vsix"
-          mv "nix-develop-$VERSION.vsix" "nix-develop.vsix"
+            "nix-devshell-$VERSION.vsix"
+          mv "nix-devshell-$VERSION.vsix" "nix-devshell.vsix"
       - name: Publish to Open VSX Registry
         uses: HaaLeo/publish-vscode-extension@v2
         with:
-          extensionFile: nix-develop.vsix
+          extensionFile: nix-devshell.vsix
           pat: ${{ secrets.OPEN_VSX_TOKEN }}

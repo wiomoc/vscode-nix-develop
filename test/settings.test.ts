@@ -37,7 +37,7 @@ const source = await fs.readFile(path.join(ROOT, "src", "config.ts"), "utf8");
 
 const contributed = new Map<string, unknown>(
   Object.entries(pkg.contributes.configuration.properties as Record<string, { default: unknown }>)
-    .map(([key, value]) => [key.replace(/^nixDevelop\./, ""), value.default]),
+    .map(([key, value]) => [key.replace(/^nixDevShell\./, ""), value.default]),
 );
 
 const read = new Map<string, string>();
@@ -64,14 +64,14 @@ describe("settings manifest", () => {
       if (!contributed.has(name)) continue;
       const mine = literal(expr);
       if (mine === undefined) continue; // not a literal; nothing to compare
-      expect(mine, `default for nixDevelop.${name}`).toEqual(contributed.get(name));
+      expect(mine, `default for nixDevShell.${name}`).toEqual(contributed.get(name));
     }
   });
 
   it("the removed settings are gone from both", () => {
     for (const name of ["devShell", "autoActivate", "remote.patchServerNode"]) {
-      expect(contributed.has(name), `nixDevelop.${name} is still contributed`).toBe(false);
-      expect(read.has(name), `nixDevelop.${name} is still read by readConfig`).toBe(false);
+      expect(contributed.has(name), `nixDevShell.${name} is still contributed`).toBe(false);
+      expect(read.has(name), `nixDevShell.${name} is still read by readConfig`).toBe(false);
     }
   });
 });

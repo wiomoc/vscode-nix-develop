@@ -4,13 +4,13 @@ import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { computeDelta } from "../src/environment";
 import type { EnvDelta } from "../src/environment";
-import type { NixDevelopConfig } from "../src/config";
+import type { NixDevShellConfig } from "../src/config";
 import type { CaptureResult } from "../src/nix";
 import { captureEnv, currentSystem, listDevShells, toInstallable } from "../src/nix";
 import * as stub from "./activation-stub";
 import { forgetPty } from "../src/utils/pty";
 
-const cfg: NixDevelopConfig = {
+const cfg: NixDevShellConfig = {
   flakeDirectory: ".",
   promptWhenUnset: true,
   impure: false,
@@ -66,7 +66,7 @@ describe("nix (end-to-end)", { tags: ["e2e"] }, () => {
   const progressed: string[] = [];
 
   beforeAll(async () => {
-    dir = await fs.mkdtemp(path.join(os.tmpdir(), "nix-develop-e2e-"));
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "nix-devshell-e2e-"));
     system = await currentSystem(cfg, dir);
     await fs.writeFile(path.join(dir, "flake.nix"), FLAKE.replace("@SYSTEM@", system));
 
@@ -104,9 +104,9 @@ describe("nix (end-to-end)", { tags: ["e2e"] }, () => {
   // The same build again, this time with a terminal to write to. Everything Nix withholds
   // over a pipe -- colour, and the progress bar it redraws in place -- depends on this and
   // on nothing else, so it is worth proving against the real CLI rather than assuming.
-  // `NIX_DEVELOP_APP_ROOT` is an installed VS Code's `resources/app`, which is where the
+  // `NIX_DEVSHELL_APP_ROOT` is an installed VS Code's `resources/app`, which is where the
   // pty comes from; without one these report themselves as skipped.
-  const appRoot = process.env.NIX_DEVELOP_APP_ROOT;
+  const appRoot = process.env.NIX_DEVSHELL_APP_ROOT;
 
   describe.skipIf(appRoot === undefined)("given a terminal", () => {
     const coloured: string[] = [];

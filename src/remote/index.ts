@@ -29,7 +29,7 @@ export {
   decodeAuthority,
   storageKeyFor,
 } from "./authority";
-export { NixDevelopResolver } from "./resolver";
+export { NixDevShellResolver } from "./resolver";
 export { restartDevShellWindow, watchDevShellFlake } from "./flake-watch";
 export { openPendingFile } from "./recover";
 
@@ -67,7 +67,7 @@ export async function reopenInDevShell(
     // one launch, and a window opened from the dock or a recent-folders entry would lose
     // it again. "Configure Runtime Arguments" opens that file.
     const choice = await vscode.window.showWarningMessage(
-      "Nix Develop needs the `resolvers` proposed API to open a devShell window. " +
+      "Nix DevShell needs the `resolvers` proposed API to open a devShell window. " +
         `Add "enable-proposed-api": ["${EXTENSION_ID}"] to argv.json, ` +
         "then restart VS Code.",
       "Open argv.json",
@@ -155,7 +155,7 @@ export async function showRemoteExtensions(
     }));
 
   const lines = [
-    `# Extensions for devShell '${process.env.NIX_DEVELOP_SHELL ?? authority}'`,
+    `# Extensions for devShell '${process.env.NIX_DEVSHELL_SHELL ?? authority}'`,
     "",
     `Server extensions directory:`,
     `  ${dir}`,
@@ -235,9 +235,6 @@ export async function killServer(
     return;
   }
 
-  const servers = new ServerManager(context.globalStorageUri, cfg);
-  const stopped = await servers.stop(key);
-
   // Stopping this window's own server leaves the window with nothing behind it: the
   // extension host, the file system serving the checkout and every terminal *were* that
   // server. So the command finishes the job and puts the folder back in a local window,
@@ -247,9 +244,13 @@ export async function killServer(
     log.info(
       "stopped this window's devShell server; reopening the folder locally",
     );
-    await reopenFolderLocally(folder.uri);
+    reopenFolderLocally(folder.uri);
     return;
   }
+
+  const servers = new ServerManager(context.globalStorageUri, cfg);
+  const stopped = await servers.stop(key);
+
 
   void vscode.window.showInformationMessage(
     stopped
@@ -372,7 +373,7 @@ export async function offerExtensionSync(
   const authority = vscode.env.remoteAuthority;
   if (!authority || !inDevShellWindow()) return;
 
-  const key = `nixDevelop.extensionsOffered.${storageKeyFor(authority)}`;
+  const key = `nixDevShell.extensionsOffered.${storageKeyFor(authority)}`;
   if (context.globalState.get<boolean>(key)) return;
 
   const dir = extensionsDirFor(

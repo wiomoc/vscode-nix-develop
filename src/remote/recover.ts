@@ -13,7 +13,7 @@ import type { RemoteTarget } from "./authority";
  * no local workspace, so there is no workspace state to write to, and the window that comes
  * back is a different one either way.
  */
-const PENDING_KEY = "nixDevelop.openAfterReopen";
+const PENDING_KEY = "nixDevShell.openAfterReopen";
 
 /**
  * How long a pending request stays worth acting on.
@@ -179,7 +179,7 @@ export async function errorSite(
  * within the flake -- which is what makes it recoverable at all.
  *
  * What the store copy is rooted at is the *repository*, though, not necessarily the flake:
- * `nixDevelop.flakeDirectory` pointing at a subdirectory makes Nix copy the work tree and
+ * `nixDevShell.flakeDirectory` pointing at a subdirectory makes Nix copy the work tree and
  * address the flake within it, so the reported path carries that subdirectory twice over.
  * Hence the leading components are dropped one at a time until something matches -- and
  * nothing is returned unless the file it names really is in the checkout.

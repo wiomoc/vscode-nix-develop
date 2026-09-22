@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { NixDevelopConfig } from "../src/config";
+import type { NixDevShellConfig } from "../src/config";
 import { ensureInstalled, installedIn } from "../src/remote/extensions";
 import { run as exec } from "../src/utils/run-subprocess";
 import { isPortOpen, ServerManager } from "../src/remote/server";
@@ -12,7 +12,7 @@ import { forgetProduct, readProduct, serverDownloadUrl, serverOsArch } from "../
 import * as stub from "./activation-stub";
 import { currentSystem } from "../src/nix";
 
-const cfg: NixDevelopConfig = {
+const cfg: NixDevShellConfig = {
   flakeDirectory: ".",
   promptWhenUnset: true,
   impure: false,
@@ -47,15 +47,15 @@ const FLAKE = `{
 const exists = (p: string): Promise<boolean> =>
   fs.lstat(p).then(() => true).catch(() => false);
 
-const commit = process.env.NIX_DEVELOP_COMMIT ?? "";
+const commit = process.env.NIX_DEVSHELL_COMMIT ?? "";
 
 /**
  * Drives the real VS Code server lifecycle: start it inside `nix develop`, confirm the
  * devShell environment actually reached the server process, reuse it, then stop it.
  *
- * Needs a VS Code server: set NIX_DEVELOP_SERVER_DIR to an already extracted distribution
+ * Needs a VS Code server: set NIX_DEVSHELL_SERVER_DIR to an already extracted distribution
  * (the directory containing `bin/code-server`) to skip the ~70MB download; otherwise the
- * test downloads one for NIX_DEVELOP_COMMIT.
+ * test downloads one for NIX_DEVSHELL_COMMIT.
  *
  * These run in the order they are written and share one server: each is a question about
  * the state the one before it left behind, which is why this project is not parallelised.
@@ -78,7 +78,7 @@ describe.skipIf(commit === "")("server (end-to-end)", { tags: ["e2e"] }, () => {
     manager = new ServerManager({ fsPath: storage } as never, cfg);
 
     // Seed the managed location from a pre-extracted distribution when one is provided.
-    const preset = process.env.NIX_DEVELOP_SERVER_DIR;
+    const preset = process.env.NIX_DEVSHELL_SERVER_DIR;
     if (preset) {
       const dest = path.join(storage, "server", commit);
       await fs.mkdir(path.dirname(dest), { recursive: true });
@@ -91,7 +91,7 @@ describe.skipIf(commit === "")("server (end-to-end)", { tags: ["e2e"] }, () => {
 
     extensionsDir = path.join(storage, "ext");
     serverDataDir = path.join(storage, "data");
-    profile = path.join(work, ".vscode", "nix-develop", "default", "devshell");
+    profile = path.join(work, ".vscode", "nix-devshell", "default", "devshell");
   });
 
   afterAll(async () => {
@@ -291,8 +291,8 @@ describe.skipIf(commit === "")("server (end-to-end)", { tags: ["e2e"] }, () => {
   });
 
   it("installs a declared extension into the devShell's own directory", async (ctx) => {
-    const vsix = process.env.NIX_DEVELOP_TEST_VSIX;
-    if (!vsix) ctx.skip("no NIX_DEVELOP_TEST_VSIX");
+    const vsix = process.env.NIX_DEVSHELL_TEST_VSIX;
+    if (!vsix) ctx.skip("no NIX_DEVSHELL_TEST_VSIX");
     const res = await ensureInstalled({
       launcher,
       extensionsDir,
@@ -340,14 +340,14 @@ describe.skipIf(commit === "")("server (end-to-end)", { tags: ["e2e"] }, () => {
  * The same lifecycle, for an editor that is not Microsoft's build.
  *
  * Everything that differs is read off the editor rather than written down here: the commit,
- * the download URL, the tarball's shape and the launcher's name. `NIX_DEVELOP_APP_ROOT` is
+ * the download URL, the tarball's shape and the launcher's name. `NIX_DEVSHELL_APP_ROOT` is
  * an installed editor's `resources/app` -- VSCodium's, in the `ci` devShell -- so this is
  * the server suite CI runs, needing no commit from anywhere.
  *
  * Skipped for a build that declares no server of its own: that is Microsoft's, which the
  * suite above already covers.
  */
-const appRoot = process.env.NIX_DEVELOP_APP_ROOT ?? "";
+const appRoot = process.env.NIX_DEVSHELL_APP_ROOT ?? "";
 // Read here rather than in a hook, because `skipIf` is answered before any hook runs. A
 // skipped suite is still *collected*, though -- the body below runs either way -- so it
 // reaches the editor only from inside a test, and through these defaults elsewhere.
@@ -361,7 +361,7 @@ describe.skipIf(!editor?.serverDownloadUrlTemplate || productCommit === "")(
     // No `serverDownloadUrl`: an override would defeat the point, which is that the editor
     // is asked. `clientProduct()` reads the appRoot the editor reports, so that is what has
     // to be pointed at the installation -- and it memoises, hence the forget on both sides.
-    const productCfg: NixDevelopConfig = {
+    const productCfg: NixDevShellConfig = {
       ...cfg,
       remote: { ...cfg.remote, serverDownloadUrl: "" },
     };
@@ -443,7 +443,7 @@ describe.skipIf(!editor?.serverDownloadUrlTemplate || productCommit === "")(
         launcher,
         installable: `path:${work}#devShells.${sys}.default`,
         flakeDir: work,
-        profile: path.join(work, ".vscode", "nix-develop", "default", "devshell"),
+        profile: path.join(work, ".vscode", "nix-devshell", "default", "devshell"),
         extensionsDir: path.join(storage, "ext"),
         serverDataDir: path.join(storage, "data"),
       });
@@ -526,7 +526,7 @@ async function cmdlineOf(pid: number): Promise<string> {
  * Opt-in, because the server's grace period is a fixed five minutes and no flag shortens it
  * without also making a window reload tear the server down.
  */
-describe.skipIf(commit === "" || process.env.NIX_DEVELOP_E2E_IDLE !== "1")(
+describe.skipIf(commit === "" || process.env.NIX_DEVSHELL_E2E_IDLE !== "1")(
   "idle shutdown (end-to-end)",
   { tags: ["e2e"] },
   () => {
@@ -543,14 +543,14 @@ describe.skipIf(commit === "" || process.env.NIX_DEVELOP_E2E_IDLE !== "1")(
     work = await fs.mkdtemp(path.join(os.tmpdir(), "nd-idle-work-"));
     manager = new ServerManager({ fsPath: storage } as never, cfg);
 
-    const preset = process.env.NIX_DEVELOP_SERVER_DIR;
+    const preset = process.env.NIX_DEVSHELL_SERVER_DIR;
     if (preset) {
       const dest = path.join(storage, "server", commit);
       await fs.mkdir(path.dirname(dest), { recursive: true });
       await fs.symlink(preset, dest);
     }
 
-    profile = path.join(work, ".vscode", "nix-develop", "default", "devshell");
+    profile = path.join(work, ".vscode", "nix-devshell", "default", "devshell");
     lock = path.join(storage, "server", "instances", `${key}.json`);
 
     const sys = await currentSystem(cfg, work);

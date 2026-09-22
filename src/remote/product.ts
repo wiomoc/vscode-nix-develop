@@ -164,7 +164,7 @@ function expandServerUrl(
 /**
  * Where to fetch a server matching `commit`.
  *
- * `configured` is `nixDevelop.remote.serverDownloadUrl`, and it wins when it is set, since
+ * `configured` is `nixDevShell.remote.serverDownloadUrl`, and it wins when it is set, since
  * overriding exactly this is what it exists for. Otherwise the product is asked: VSCodium's
  * `product.json` carries a `serverDownloadUrlTemplate` pointing at its own GitHub release,
  * with the release tag already resolved, which is what makes it work with no configuration
