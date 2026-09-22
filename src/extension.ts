@@ -1,6 +1,12 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { flakeDir, readConfig, SECTION, setResolverAvailable } from "./config";
+import {
+  EXTENSION_ID,
+  flakeDir,
+  readConfig,
+  SECTION,
+  setResolverAvailable,
+} from "./config";
 import { initLog, log } from "./utils/log";
 import {
   AUTHORITY_PREFIX,
@@ -205,7 +211,9 @@ function registerResolver(context: vscode.ExtensionContext): void {
   if (typeof api.registerRemoteAuthorityResolver !== "function") {
     log.info(
       "workspace.registerRemoteAuthorityResolver is unavailable; " +
-        "start VS Code with --enable-proposed-api nix-develop.nix-develop to enable devShell windows",
+        `add "enable-proposed-api": ["${EXTENSION_ID}"] to argv.json ` +
+        "(Preferences: Configure Runtime Arguments) and restart VS Code " +
+        "to enable devShell windows",
     );
     return;
   }

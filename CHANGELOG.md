@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **The missing-proposed-API warning now names `argv.json` and opens it.** `resolvers` is
+  granted at launch and never mid-session, so telling someone to relaunch with
+  `--enable-proposed-api` leaves them one dock click away from losing it again. `Reopen in
+  devShell` now shows the `"enable-proposed-api": ["wiomoc.nix-develop"]` line to add,
+  offers **Open argv.json** (`Preferences: Configure Runtime Arguments`), and says the
+  editor has to be restarted for it to be read. The activation log line says the same.
+- The warning and the activation log named `nix-develop.nix-develop`, which is not the
+  extension id -- following it left the API just as ungranted. It is `wiomoc.nix-develop`,
+  as `docs/REMOTE.md` now also says.
+
 ## 0.6.4
 
 - **A Nix-supplied extension is now recorded where the server actually looks, so it loads.**

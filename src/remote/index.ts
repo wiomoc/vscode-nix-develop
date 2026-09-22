@@ -1,7 +1,7 @@
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { isResolverAvailable, readConfig } from "../config";
+import { EXTENSION_ID, isResolverAvailable, readConfig } from "../config";
 import { log } from "../utils/log";
 import {
   captureEnv,
@@ -63,13 +63,21 @@ export async function reopenInDevShell(
   // API that stock VS Code grants only at launch. Checked here, at the single funnel for
   // opening one, rather than warning every window that merely has a flake.nix.
   if (!isResolverAvailable()) {
+    // argv.json rather than the --enable-proposed-api flag: the flag only holds for the
+    // one launch, and a window opened from the dock or a recent-folders entry would lose
+    // it again. "Configure Runtime Arguments" opens that file.
     const choice = await vscode.window.showWarningMessage(
       "Nix Develop needs the `resolvers` proposed API to open a devShell window. " +
-        "Relaunch VS Code with --enable-proposed-api nix-develop.nix-develop.",
+        `Add "enable-proposed-api": ["${EXTENSION_ID}"] to argv.json, ` +
+        "then restart VS Code.",
+      "Open argv.json",
       "How?",
-      "Dismiss",
     );
-    if (choice === "How?") log.show();
+    if (choice === "Open argv.json") {
+      await vscode.commands.executeCommand(
+        "workbench.action.configureRuntimeArguments",
+      );
+    } else if (choice === "How?") log.show();
     return;
   }
 

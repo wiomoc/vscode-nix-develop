@@ -122,3 +122,9 @@ jobs:
             --title "$GITHUB_REF_NAME" \
             "${notes[@]}" \
             "nix-develop-$VERSION.vsix"
+          mv "nix-develop-$VERSION.vsix" "nix-develop.vsix"
+      - name: Publish to Open VSX Registry
+        uses: HaaLeo/publish-vscode-extension@v2
+        with:
+          extensionFile: nix-develop.vsix
+          pat: ${{ secrets.OPEN_VSX_TOKEN }}

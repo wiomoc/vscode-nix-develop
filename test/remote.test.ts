@@ -16,7 +16,7 @@ import {
 import { serverPlatform } from "../src/remote/server";
 import { glibcLinkerName } from "../src/remote/server-ld-patch";
 import { registerResourceLabelFormatter } from "../src/ui";
-import { killServer } from "../src/remote/index";
+import { killServer, reopenInDevShell } from "../src/remote/index";
 import * as stub from "./activation-stub";
 
 const target = { folder: "/w/proj", flakeDir: "/w/proj", devShell: "default" };
@@ -296,5 +296,41 @@ describe("stopping a devShell server", () => {
     const authority = authorityFor({ folder: "/w/proj", flakeDir: "/w/proj", devShell: "default" });
     await kill(authority, stub.Uri.from({ scheme: "vscode-remote", authority, path: "/w/proj" }));
     expect(stub.recorded.executed, "the window was left with nothing").toContain("vscode.openFolder");
+  });
+});
+
+describe("reopening without the proposed API", () => {
+  // `resolvers` is granted at launch and never mid-session, so the only useful thing to
+  // say is how to grant it for the *next* launch -- and the durable way to do that is
+  // argv.json, not a --enable-proposed-api flag that one dock click would drop.
+  const folder = { uri: stub.Uri.file("/w/proj"), name: "proj", index: 0 };
+
+  it("points at argv.json and names the id to put there", async () => {
+    stub.recorded.warningMessages.length = 0;
+    stub.recorded.executed.length = 0;
+
+    await reopenInDevShell(folder as never, "default", "/w/proj");
+
+    const warning = stub.recorded.warningMessages[0];
+    expect(warning?.message).toContain('"enable-proposed-api": ["wiomoc.nix-develop"]');
+    expect(warning?.message, "argv.json is only read at launch").toContain("restart");
+    expect(
+      stub.recorded.executed.includes("vscode.openFolder"),
+      "a window opened here would fail to resolve, so it is not opened",
+    ).toBe(false);
+  });
+
+  it("the offer opens argv.json rather than leaving the path to be found", async () => {
+    stub.recorded.warningMessages.length = 0;
+    stub.recorded.executed.length = 0;
+    stub.answers.warningMessage = (_m, items) => items[0];
+    try {
+      await reopenInDevShell(folder as never, "default", "/w/proj");
+    } finally {
+      stub.answers.warningMessage = undefined;
+    }
+
+    expect(stub.recorded.warningMessages[0]?.items[0]).toEqual("Open argv.json");
+    expect(stub.recorded.executed).toContain("workbench.action.configureRuntimeArguments");
   });
 });

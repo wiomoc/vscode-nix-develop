@@ -20,6 +20,7 @@ export const recorded = {
   openedDocuments: [] as unknown[],
   shownDocuments: [] as { doc: unknown; options?: unknown }[],
   errorMessages: [] as { message: string; modal: boolean; items: string[] }[],
+  warningMessages: [] as { message: string; items: string[] }[],
 };
 
 /**
@@ -28,6 +29,9 @@ export const recorded = {
  */
 export const answers = {
   errorMessage: undefined as
+    | ((message: string, items: string[]) => string | undefined)
+    | undefined,
+  warningMessage: undefined as
     | ((message: string, items: string[]) => string | undefined)
     | undefined,
 };
@@ -255,7 +259,10 @@ export const window = {
     recorded.infoMessages.push(m);
     return undefined;
   },
-  showWarningMessage: async () => undefined,
+  showWarningMessage: async (message: string, ...items: string[]) => {
+    recorded.warningMessages.push({ message, items });
+    return answers.warningMessage?.(message, items);
+  },
   // The real signature is `(message, options?, ...items)`, so a `MessageOptions` may sit
   // between the message and the buttons. Splitting it off here keeps `items` the list of
   // actions the user is actually offered, whichever overload the caller reached for.

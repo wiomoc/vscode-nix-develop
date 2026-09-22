@@ -69,6 +69,12 @@ export function flakeDir(folder: vscode.WorkspaceFolder, cfg: NixDevelopConfig):
 }
 
 /**
+ * `publisher.name` from package.json -- the id `--enable-proposed-api` and the
+ * `enable-proposed-api` entry in `argv.json` have to name.
+ */
+export const EXTENSION_ID = "wiomoc.nix-develop";
+
+/**
  * Whether the `resolvers` proposed API was granted this session.
  *
  * Opening a devShell window is the only thing a selected devShell does, so without the

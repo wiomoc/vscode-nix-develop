@@ -18,7 +18,7 @@ For the same flow as a diagram, see
 allowlisted at launch:
 
 ```bash
-code --enable-proposed-api nix-develop.nix-develop
+code --enable-proposed-api wiomoc.nix-develop
 ```
 
 Make it permanent by adding the extension id to `argv.json`
@@ -26,12 +26,13 @@ Make it permanent by adding the extension id to `argv.json`
 
 ```jsonc
 {
-  "enable-proposed-api": ["nix-develop.nix-develop"]
+  "enable-proposed-api": ["wiomoc.nix-develop"]
 }
 ```
 
-Without the flag the extension still loads and everything else works; it logs that the
-resolver could not be registered and `Reopen in devShell` will fail to resolve. The
+Without it the extension still loads and everything else works; it logs that the resolver
+could not be registered, and `Reopen in devShell` warns with the `argv.json` snippet above
+and an **Open argv.json** button instead of opening a window that could not resolve. The
 registration is guarded by a capability check, so a stock editor never sees an error.
 
 Proposed APIs carry no compatibility guarantee and can change between VS Code releases.
