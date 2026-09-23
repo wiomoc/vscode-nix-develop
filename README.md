@@ -62,10 +62,18 @@ For an editor installed some other way, `overlays.default` carries just the laun
 argument: applied to your nixpkgs it makes `pkgs.vscode` and `pkgs.vscode-fhs` start with
 the proposed API enabled. The extension on its own is `packages.${system}.default`.
 
+### From Open VSX
+
+The extension is published on
+[Open VSX](https://open-vsx.org/extension/wiomoc/nix-devshell), the registry VSCodium and
+other VS Code forks install from. Search for *Nix DevShell* in the Extensions view, then
+allow the proposed API as in steps 3 and 4 below.
+
 ### From a `.vsix`
 
 1. Download `nix-devshell-<version>.vsix` from
-   [Releases](https://github.com/wiomoc/vscode-nix-devshell/releases).
+   [Releases](https://github.com/wiomoc/vscode-nix-devshell/releases) or
+   [Open VSX](https://open-vsx.org/extension/wiomoc/nix-devshell).
 2. Install it, with `code --install-extension nix-devshell-<version>.vsix` or from
    *Extensions → ⋯ → Install from VSIX…*.
 3. Allow the proposed API for good, by adding the extension id to `argv.json` —
