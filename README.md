@@ -1,4 +1,4 @@
-# VSCode Nix DevShell
+<h1><img src="images/icon.png" alt="" width="48" align="absmiddle"> VSCode Nix DevShell</h1>
 
 Open a workspace that has a `flake.nix`, pick a devShell, and VS Code uses it — terminals,
 tasks, debuggers and language servers all get the toolchain `nix develop` would have given

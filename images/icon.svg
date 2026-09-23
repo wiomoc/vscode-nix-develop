@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#262c3d"/><stop offset="1" stop-color="#161a24"/></linearGradient>
+<linearGradient id="gL" gradientUnits="userSpaceOnUse" gradientTransform="translate(70.650339,-1055.1511)" x1="200.59668" y1="351.41116" x2="290.08701" y2="506.18814"><stop offset="0" stop-color="#699ad7"/><stop offset=".243" stop-color="#7eb1dd"/><stop offset="1" stop-color="#7ebae4"/></linearGradient>
+<linearGradient id="gD" gradientUnits="userSpaceOnUse" gradientTransform="translate(864.69589,-1491.3405)" x1="-584.19934" y1="782.33563" x2="-496.29703" y2="937.71399"><stop offset="0" stop-color="#415e9a"/><stop offset=".232" stop-color="#4a6baf"/><stop offset="1" stop-color="#5277c3"/></linearGradient>
+<path id="l" d="m 309.54892,-710.38827 122.19683,211.67512 -56.15706,0.5268 -32.6236,-56.8692 -32.85645,56.5653 -27.90237,-0.011 -14.29086,-24.6896 46.81047,-80.4901 -33.22946,-57.8257 z"/>
+</defs>
+<rect width="256" height="256" rx="56" fill="url(#bg)"/>
+<g transform="translate(128 128) scale(0.43) translate(-407.3 715.8)"><use href="#l" fill="url(#gD)" transform="rotate(0 407.3 -715.8)"/><use href="#l" fill="url(#gL)" transform="rotate(60 407.3 -715.8)"/><use href="#l" fill="url(#gD)" transform="rotate(120 407.3 -715.8)"/><use href="#l" fill="url(#gL)" transform="rotate(180 407.3 -715.8)"/><use href="#l" fill="url(#gD)" transform="rotate(240 407.3 -715.8)"/><use href="#l" fill="url(#gL)" transform="rotate(300 407.3 -715.8)"/></g>
+<g transform="translate(109.78 117.2) scale(0.9)"><path d="M0 0 L14 12 L0 24" fill="none" stroke="#e6edf3" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/><rect x="22" y="20" width="22" height="7" rx="3" fill="#e6edf3"/></g>
+</svg>

@@ -4,6 +4,7 @@
   "description": "Select a devShell from your flake.nix and reopen the workspace inside it, with the editor running in nix develop.",
   "version": "0.6.4",
   "publisher": "wiomoc",
+  "icon": "images/icon.png",
   "license": "MIT",
   "repository": {
     "type": "git",

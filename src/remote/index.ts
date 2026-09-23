@@ -147,12 +147,10 @@ export async function killServer(
       "stopped this window's devShell server; reopening the folder locally",
     );
     reopenFolderLocally(folder.uri);
-    return;
   }
 
   const servers = new ServerManager(context.globalStorageUri, cfg);
   const stopped = await servers.stop(key);
-
 
   void vscode.window.showInformationMessage(
     stopped
@@ -225,13 +223,6 @@ export async function switchDevShellInRemoteWindow(
     devShell: picked.value,
   });
 
-  // Stop the server being left, so the next visit starts with the flake's current
-  // extension set.
-  const servers = new ServerManager(context.globalStorageUri, cfg);
-  if (await servers.stop(storageKeyFor(authority))) {
-    log.info(`stopped the server for devShell ${target.devShell}`);
-  }
-
   const uri = vscode.Uri.from({
     scheme: "vscode-remote",
     authority: next,
@@ -240,9 +231,16 @@ export async function switchDevShellInRemoteWindow(
   log.info(
     `switching devShell ${target.devShell} -> ${picked.value} (${next})`,
   );
-  await vscode.commands.executeCommand("vscode.openFolder", uri, {
+  vscode.commands.executeCommand("vscode.openFolder", uri, {
     forceReuseWindow: true,
   });
+
+  // Stop the server being left, so the next visit starts with the flake's current
+  // extension set.
+  const servers = new ServerManager(context.globalStorageUri, cfg);
+  if (await servers.stop(storageKeyFor(authority))) {
+    log.info(`stopped the server for devShell ${target.devShell}`);
+  }
 }
 
 /**
