@@ -20,3 +20,4 @@ package-lock.json
 dist/**/*.map
 architecture/**
 result
+README.md

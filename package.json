@@ -2,7 +2,7 @@
   "name": "nix-devshell",
   "displayName": "Nix DevShell",
   "description": "Select a devShell from your flake.nix and reopen the workspace inside it, with the editor running in nix develop.",
-  "version": "0.6.4",
+  "version": "0.7.0",
   "publisher": "wiomoc",
   "icon": "images/icon.png",
   "license": "MIT",
@@ -199,7 +199,7 @@
     "test:e2e": "vitest run --tagsFilter e2e",
     "test:watch": "vitest --tagsFilter '!e2e'",
     "test:server": "NIX_DEVSHELL_COMMIT=$(code --version | sed -n 2p) vitest run --tagsFilter e2e",
-    "package": "vsce package --no-dependencies"
+    "package": "mkdir -p out && sed -e '1,2{/^<h1>/d;/^$/d;}' README.md > out/README.md && vsce package --no-dependencies --readme-path out/README.md"
   },
   "devDependencies": {
     "@types/node": "^22.20.4",

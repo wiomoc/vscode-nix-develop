@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
 
 - **One `nix develop` per window, not two.** Opening a devShell window used to enter the
   shell twice: once with a shell script that dumped its environment into a temp file, which

@@ -71,10 +71,10 @@
                   # Required by `keytar`, which is a dependency of `vsce`.
                   pkgs.pkg-config
                 ];
-                npmDepsHash = "sha256-00pkvk1pll5XxJUioBVt8eZjZmBPqwXPJFxsAuTKkF0=";
+                npmDepsHash = "sha256-A1lurCeaJN2uifdIUW5EjV2zjOl+tQnYz3bLO9CuDRQ=";
                 installPhase = "
               runHook preInstall
-              npm exec --package=@vscode/vsce -- vsce package --out $out
+              npm run package -- --out $out
               runHook postInstall
               ";
               };
